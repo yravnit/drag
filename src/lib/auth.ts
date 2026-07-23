@@ -16,6 +16,9 @@ export const auth = betterAuth({
       scope: ["public_repo"],
     },
   },
+  account: {
+    encryptOAuthTokens: true,
+  },
   secret: serverEnv.BETTER_AUTH_SECRET,
   baseURL: serverEnv.BETTER_AUTH_URL,
 });
