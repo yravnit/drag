@@ -12,6 +12,8 @@
 
 # testing
 /coverage
+**/__tests__/
+vitest.config.ts
 
 # next.js
 /.next/
@@ -42,3 +44,5 @@ next-env.d.ts
 
 # project requirements
 project.list.md
+HANDOFF.md
+/.swc
