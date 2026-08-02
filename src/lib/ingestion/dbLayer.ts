@@ -1,8 +1,15 @@
-import { db } from '@/db/db';
-import { repositories, chunks, repositoryFiles, NewChunk, NewRepositoryFile, Repository } from '@/db/schema';
-import { eq, inArray, and } from 'drizzle-orm';
-import { RepositoryMetadata } from './repositoryProvider';
-import { ProcessedFileResult } from './batchProcessor';
+import { db } from "@/db/db";
+import {
+  repositories,
+  chunks,
+  repositoryFiles,
+  NewChunk,
+  NewRepositoryFile,
+  Repository,
+} from "@/db/schema";
+import { eq, inArray, and } from "drizzle-orm";
+import { RepositoryMetadata } from "./repositoryProvider";
+import { ProcessedFileResult } from "./batchProcessor";
 
 export interface DatabaseLayerOptions {
   maxRetries?: number;
@@ -14,28 +21,39 @@ export interface DatabaseLayerOptions {
  * Transient errors include network disconnects, timeouts, deadlocks, serialization failures, and 5xx/429 status codes.
  */
 export function isTransientDatabaseError(error: unknown): boolean {
-  if (!error || typeof error !== 'object') return false;
+  if (!error || typeof error !== "object") return false;
   const err = error as Record<string, unknown>;
-  const code = String(err.code || '');
-  const message = String(err.message || '').toLowerCase();
+  const code = String(err.code || "");
+  const message = String(err.message || "").toLowerCase();
 
-  const transientPostgresCodes = new Set(['40001', '40P01', '57014', '57P01', '08000', '08001', '08003', '08004', '08006', '08007']);
+  const transientPostgresCodes = new Set([
+    "40001",
+    "40P01",
+    "57014",
+    "57P01",
+    "08000",
+    "08001",
+    "08003",
+    "08004",
+    "08006",
+    "08007",
+  ]);
   if (transientPostgresCodes.has(code)) return true;
 
   const transientKeywords = [
-    'econnreset',
-    'etimedout',
-    'epipe',
-    'enotfound',
-    'econnrefused',
-    'connection closed',
-    'connection reset',
-    'timeout',
-    'network error',
-    '502',
-    '503',
-    '504',
-    '429',
+    "econnreset",
+    "etimedout",
+    "epipe",
+    "enotfound",
+    "econnrefused",
+    "connection closed",
+    "connection reset",
+    "timeout",
+    "network error",
+    "502",
+    "503",
+    "504",
+    "429",
   ];
 
   return transientKeywords.some((kw) => message.includes(kw));
@@ -63,11 +81,13 @@ export class IngestionDatabaseLayer {
         const isTransient = isTransientDatabaseError(error);
         if (!isTransient || attempt > this.maxRetries) {
           throw new Error(
-            `[Database Error] Operation '${operationName}' failed (${isTransient ? 'max retries reached' : 'non-transient error'}): ${(error as Error).message}`
+            `[Database Error] Operation '${operationName}' failed (${isTransient ? "max retries reached" : "non-transient error"}): ${(error as Error).message}`,
           );
         }
         const delay = this.retryDelayMs * Math.pow(2, attempt - 1);
-        console.warn(`[Database Warning] Transient retry attempt ${attempt}/${this.maxRetries} for '${operationName}' after ${delay}ms...`);
+        console.warn(
+          `[Database Warning] Transient retry attempt ${attempt}/${this.maxRetries} for '${operationName}' after ${delay}ms...`,
+        );
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
@@ -77,8 +97,12 @@ export class IngestionDatabaseLayer {
    * Retrieves an existing repository record by repository URL.
    */
   public async getRepositoryByUrl(url: string): Promise<Repository | null> {
-    return this.withRetry('getRepositoryByUrl', async () => {
-      const records = await db.select().from(repositories).where(eq(repositories.url, url)).limit(1);
+    return this.withRetry("getRepositoryByUrl", async () => {
+      const records = await db
+        .select()
+        .from(repositories)
+        .where(eq(repositories.url, url))
+        .limit(1);
       return records.length > 0 ? records[0] : null;
     });
   }
@@ -86,8 +110,11 @@ export class IngestionDatabaseLayer {
   /**
    * Retrieves an existing repository record by owner and name.
    */
-  public async getRepositoryByOwnerAndName(owner: string, name: string): Promise<Repository | null> {
-    return this.withRetry('getRepositoryByOwnerAndName', async () => {
+  public async getRepositoryByOwnerAndName(
+    owner: string,
+    name: string,
+  ): Promise<Repository | null> {
+    return this.withRetry("getRepositoryByOwnerAndName", async () => {
       const records = await db
         .select()
         .from(repositories)
@@ -102,7 +129,7 @@ export class IngestionDatabaseLayer {
    * Returns a Map of relative file path -> content hash.
    */
   public async getRepositoryFiles(repositoryId: string): Promise<Map<string, string>> {
-    return this.withRetry('getRepositoryFiles', async () => {
+    return this.withRetry("getRepositoryFiles", async () => {
       const records = await db
         .select({ filePath: repositoryFiles.filePath, contentHash: repositoryFiles.contentHash })
         .from(repositoryFiles)
@@ -121,7 +148,7 @@ export class IngestionDatabaseLayer {
    * Single database round-trip, race-condition safe.
    */
   public async upsertRepository(metadata: RepositoryMetadata): Promise<string> {
-    return this.withRetry('upsertRepository', async () => {
+    return this.withRetry("upsertRepository", async () => {
       const now = new Date();
 
       const [inserted] = await db
@@ -160,9 +187,9 @@ export class IngestionDatabaseLayer {
    */
   public async saveRepositoryChunks(
     repositoryId: string,
-    processedFiles: ProcessedFileResult[]
+    processedFiles: ProcessedFileResult[],
   ): Promise<{ totalChunksInserted: number }> {
-    return this.withRetry('saveRepositoryChunks', async () => {
+    return this.withRetry("saveRepositoryChunks", async () => {
       const allNewChunks: NewChunk[] = [];
       const allNewFiles: NewRepositoryFile[] = [];
       const now = new Date();
@@ -237,9 +264,9 @@ export class IngestionDatabaseLayer {
     repositoryId: string,
     processedFiles: ProcessedFileResult[],
     deletedFilePaths: string[],
-    metadata: RepositoryMetadata
+    metadata: RepositoryMetadata,
   ): Promise<{ totalChunksInserted: number; totalFilesProcessed: number }> {
-    return this.withRetry('saveIncrementalChunks', async () => {
+    return this.withRetry("saveIncrementalChunks", async () => {
       const modifiedOrAddedPaths: string[] = [];
       const newChunks: NewChunk[] = [];
       const newFiles: NewRepositoryFile[] = [];
@@ -282,10 +309,17 @@ export class IngestionDatabaseLayer {
           const DELETE_BATCH_SIZE = 200;
           for (let i = 0; i < allPathsToDelete.length; i += DELETE_BATCH_SIZE) {
             const batch = allPathsToDelete.slice(i, i + DELETE_BATCH_SIZE);
-            await tx.delete(chunks).where(and(eq(chunks.repositoryId, repositoryId), inArray(chunks.filePath, batch)));
+            await tx
+              .delete(chunks)
+              .where(and(eq(chunks.repositoryId, repositoryId), inArray(chunks.filePath, batch)));
             await tx
               .delete(repositoryFiles)
-              .where(and(eq(repositoryFiles.repositoryId, repositoryId), inArray(repositoryFiles.filePath, batch)));
+              .where(
+                and(
+                  eq(repositoryFiles.repositoryId, repositoryId),
+                  inArray(repositoryFiles.filePath, batch),
+                ),
+              );
           }
         }
 

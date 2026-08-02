@@ -13,3 +13,10 @@ technical constraints, anti-patterns, and ordered next steps.
 
 **Every agent MUST read `HANDOFF.md` at the start of every session.**
 <!-- END:project-handoff -->
+
+<!-- BEGIN:update-handoff-rule -->
+# Update HANDOFF.md After Every Code Write
+
+Every agent MUST edit and update `HANDOFF.md` in the project root after writing or modifying any code. Keep the documentation in sync with all implemented features, APIs, configurations, and status changes.
+<!-- END:update-handoff-rule -->
+

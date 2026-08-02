@@ -1,10 +1,10 @@
-import fs from 'fs';
-import path from 'path';
-import os from 'os';
-import { pipeline } from 'stream/promises';
-import { Readable } from 'stream';
-import * as tar from 'tar';
-import { GitHubApiClient } from './githubApiClient';
+import fs from "fs";
+import path from "path";
+import os from "os";
+import { pipeline } from "stream/promises";
+import { Readable } from "stream";
+import * as tar from "tar";
+import { GitHubApiClient } from "./githubApiClient";
 
 export interface RepositoryMetadata {
   name: string;
@@ -30,7 +30,11 @@ export interface AcquireOptions {
 }
 
 export interface RepositoryProvider {
-  acquire(owner: string, repo: string, options?: string | AcquireOptions): Promise<AcquiredRepository>;
+  acquire(
+    owner: string,
+    repo: string,
+    options?: string | AcquireOptions,
+  ): Promise<AcquiredRepository>;
 }
 
 export class GitHubArchiveRepositoryProvider implements RepositoryProvider {
@@ -40,13 +44,19 @@ export class GitHubArchiveRepositoryProvider implements RepositoryProvider {
     this.apiClient = apiClient;
   }
 
-  async acquire(owner: string, repo: string, options?: string | AcquireOptions): Promise<AcquiredRepository> {
-    const opts: AcquireOptions = typeof options === 'string' ? { authToken: options } : options || {};
-    const client = opts.apiClient || this.apiClient || new GitHubApiClient({ authToken: opts.authToken });
+  async acquire(
+    owner: string,
+    repo: string,
+    options?: string | AcquireOptions,
+  ): Promise<AcquiredRepository> {
+    const opts: AcquireOptions =
+      typeof options === "string" ? { authToken: options } : options || {};
+    const client =
+      opts.apiClient || this.apiClient || new GitHubApiClient({ authToken: opts.authToken });
 
     // 1. Fetch Repository Metadata via dedicated API Client
     const repoData = await client.getRepository(owner, repo);
-    const defaultBranch = repoData.default_branch || 'main';
+    const defaultBranch = repoData.default_branch || "main";
     const repoUrl = repoData.html_url || `https://github.com/${owner}/${repo}`;
 
     // Target revision (branch, tag, or commit SHA; defaults to default_branch)
@@ -73,19 +83,19 @@ export class GitHubArchiveRepositoryProvider implements RepositoryProvider {
     };
 
     // 3. Create Unique Temporary Workspace
-    const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'repo-ingest-'));
+    const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "repo-ingest-"));
 
     try {
       // 4. Download Tarball Stream directly into tar.x() — no full-archive buffer
       const archiveRes = await client.downloadArchiveStream(owner, repo, targetRevision);
 
-      const extractDir = path.join(tempDir, 'extracted');
+      const extractDir = path.join(tempDir, "extracted");
       await fs.promises.mkdir(extractDir, { recursive: true });
 
       // Stream response body directly to tar extractor — avoids loading full archive into memory
       await pipeline(
-        Readable.fromWeb(archiveRes.body as import('stream/web').ReadableStream),
-        tar.x({ cwd: extractDir })
+        Readable.fromWeb(archiveRes.body as import("stream/web").ReadableStream),
+        tar.x({ cwd: extractDir }),
       );
 
       // GitHub tarballs extract into a single inner folder like `owner-repo-sha`
@@ -109,7 +119,9 @@ export class GitHubArchiveRepositoryProvider implements RepositoryProvider {
       } catch {
         // Ignore
       }
-      throw new Error(`Failed to acquire repository archive for ${owner}/${repo}@${targetRevision}: ${(error as Error).message}`);
+      throw new Error(
+        `Failed to acquire repository archive for ${owner}/${repo}@${targetRevision}: ${(error as Error).message}`,
+      );
     }
   }
 }

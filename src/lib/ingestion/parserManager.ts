@@ -1,21 +1,21 @@
-import Parser from 'web-tree-sitter';
-import fs from 'fs';
-import path from 'path';
+import Parser from "web-tree-sitter";
+import fs from "fs";
+import path from "path";
 
 export type SupportedLanguage =
-  | 'typescript'
-  | 'tsx'
-  | 'javascript'
-  | 'jsx'
-  | 'python'
-  | 'go'
-  | 'rust'
-  | 'java'
-  | 'kotlin'
-  | 'csharp'
-  | 'cpp'
-  | 'c'
-  | 'php';
+  | "typescript"
+  | "tsx"
+  | "javascript"
+  | "jsx"
+  | "python"
+  | "go"
+  | "rust"
+  | "java"
+  | "kotlin"
+  | "csharp"
+  | "cpp"
+  | "c"
+  | "php";
 
 let globalInitPromise: Promise<void> | null = null;
 
@@ -34,7 +34,7 @@ export class TreeSitterParserManager {
    * Normalizes language tags (e.g. jsx -> tsx).
    */
   public normalizeLanguage(language: SupportedLanguage): string {
-    if (language === 'jsx') return 'tsx';
+    if (language === "jsx") return "tsx";
     return language;
   }
 
@@ -57,18 +57,18 @@ export class TreeSitterParserManager {
 
     const loadPromise = (async () => {
       const wasmFileNameMap: Record<string, string> = {
-        typescript: 'tree-sitter-typescript.wasm',
-        tsx: 'tree-sitter-tsx.wasm',
-        javascript: 'tree-sitter-javascript.wasm',
-        python: 'tree-sitter-python.wasm',
-        go: 'tree-sitter-go.wasm',
-        rust: 'tree-sitter-rust.wasm',
-        java: 'tree-sitter-java.wasm',
-        kotlin: 'tree-sitter-kotlin.wasm',
-        csharp: 'tree-sitter-c_sharp.wasm',
-        cpp: 'tree-sitter-cpp.wasm',
-        c: 'tree-sitter-c.wasm',
-        php: 'tree-sitter-php.wasm',
+        typescript: "tree-sitter-typescript.wasm",
+        tsx: "tree-sitter-tsx.wasm",
+        javascript: "tree-sitter-javascript.wasm",
+        python: "tree-sitter-python.wasm",
+        go: "tree-sitter-go.wasm",
+        rust: "tree-sitter-rust.wasm",
+        java: "tree-sitter-java.wasm",
+        kotlin: "tree-sitter-kotlin.wasm",
+        csharp: "tree-sitter-c_sharp.wasm",
+        cpp: "tree-sitter-cpp.wasm",
+        c: "tree-sitter-c.wasm",
+        php: "tree-sitter-php.wasm",
       };
 
       const wasmFileName = wasmFileNameMap[normLang];
@@ -76,15 +76,18 @@ export class TreeSitterParserManager {
         throw new Error(`Unsupported tree-sitter language grammar: '${language}'`);
       }
 
-      let wasmPath: string;
-      try {
-        wasmPath = require.resolve(`tree-sitter-wasms/out/${wasmFileName}`);
-      } catch {
-        wasmPath = path.join(process.cwd(), 'node_modules', 'tree-sitter-wasms', 'out', wasmFileName);
-      }
+      const wasmPath = path.join(
+        process.cwd(),
+        "node_modules",
+        "tree-sitter-wasms",
+        "out",
+        wasmFileName,
+      );
 
       if (!fs.existsSync(wasmPath)) {
-        throw new Error(`WASM grammar file not found for language '${language}' at path: ${wasmPath}`);
+        throw new Error(
+          `WASM grammar file not found for language '${language}' at path: ${wasmPath}`,
+        );
       }
 
       const loadedLang = await Parser.Language.load(wasmPath);
@@ -107,7 +110,7 @@ export class TreeSitterParserManager {
    */
   public async withParser<T>(
     language: SupportedLanguage,
-    fn: (parser: Parser) => Promise<T> | T
+    fn: (parser: Parser) => Promise<T> | T,
   ): Promise<T> {
     const langObj = await this.getLanguage(language);
     const parser = new Parser();
@@ -142,8 +145,11 @@ export class TreeSitterParserManager {
   public dispose(): void {
     for (const langObj of this.languageCache.values()) {
       try {
-        if (langObj && typeof (langObj as { delete?: () => void }).delete === 'function') {
-          (langObj as { delete: () => void }).delete();
+        // Some web-tree-sitter versions expose delete() on Language at runtime
+        // even though the type definitions don't declare it.
+        const obj = langObj as unknown as Record<string, unknown>;
+        if (typeof obj.delete === "function") {
+          obj.delete();
         }
       } catch {
         // Ignore deletion errors if delete API is unavailable or throws

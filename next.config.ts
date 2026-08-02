@@ -3,6 +3,7 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   reactCompiler: true,
+  serverExternalPackages: ["web-tree-sitter", "tree-sitter-wasms"],
   images: {
     remotePatterns: [
       {
@@ -14,4 +15,3 @@ const nextConfig: NextConfig = {
 };
 
 export default withWorkflow(nextConfig);
-

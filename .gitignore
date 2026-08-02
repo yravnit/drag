@@ -14,6 +14,7 @@
 /coverage
 **/__tests__/
 vitest.config.ts
+/src/lib/ingestion/test-workflow.ts
 
 # next.js
 /.next/

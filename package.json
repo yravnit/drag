@@ -7,6 +7,10 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "lint:ox": "oxlint src",
+    "lint:ox:fix": "oxlint src --fix",
+    "format:ox": "oxfmt --check src drizzle.config.ts next.config.ts vitest.config.ts",
+    "format:ox:write": "oxfmt --write src drizzle.config.ts next.config.ts vitest.config.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
@@ -14,7 +18,7 @@
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
-    "auth:generate-schema": "npx @better-auth/cli generate --output src/db/schemas/auth.ts --yes"
+    "auth:generate-schema": "npx @better-auth/cli generate --config src/lib/auth/server.ts --output src/db/schemas/auth.ts --yes"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",
@@ -24,6 +28,7 @@
     "dotenv": "^17.4.2",
     "drizzle-orm": "^1.0.0-rc.4",
     "next": "16.2.10",
+    "openai": "^7.2.0",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "tar": "^7.5.21",
@@ -42,6 +47,8 @@
     "drizzle-kit": "^1.0.0-rc.4",
     "eslint": "^9",
     "eslint-config-next": "16.2.10",
+    "oxfmt": "^0.61.0",
+    "oxlint": "^1.76.0",
     "tailwindcss": "^4",
     "tsx": "^4.23.1",
     "typescript": "^5",

@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, uniqueIndex, snakeCase } from "drizzle-orm/pg-core";
+import { uuid, text, timestamp, uniqueIndex, snakeCase } from "drizzle-orm/pg-core";
 import { repositories } from "./repository";
 
 export const repositoryFiles = snakeCase.table(
@@ -20,7 +20,7 @@ export const repositoryFiles = snakeCase.table(
   },
   (table) => [
     uniqueIndex("repo_files_repo_id_file_path_idx").on(table.repositoryId, table.filePath),
-  ]
+  ],
 );
 
 export type RepositoryFile = typeof repositoryFiles.$inferSelect;

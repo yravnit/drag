@@ -1,8 +1,8 @@
-import fs from 'fs';
-import crypto from 'crypto';
-import { DiscoveredFile } from './fileFilter';
-import { TreeSitterParserManager } from './parserManager';
-import { SemanticChunker, RawChunk } from './semanticChunker';
+import fs from "fs";
+import crypto from "crypto";
+import { DiscoveredFile } from "./fileFilter";
+import { TreeSitterParserManager } from "./parserManager";
+import { SemanticChunker, RawChunk } from "./semanticChunker";
 
 export interface ProcessedFileResult {
   file: DiscoveredFile;
@@ -29,7 +29,7 @@ export class BatchProcessor {
    * Helper to compute SHA-256 content hash of file text.
    */
   public static computeContentHash(content: string): string {
-    return crypto.createHash('sha256').update(content).digest('hex');
+    return crypto.createHash("sha256").update(content).digest("hex");
   }
 
   /**
@@ -40,7 +40,7 @@ export class BatchProcessor {
    */
   public async processFiles(
     files: DiscoveredFile[],
-    onProgress?: (processedCount: number, totalCount: number) => void
+    onProgress?: (processedCount: number, totalCount: number) => void,
   ): Promise<ProcessedFileResult[]> {
     const results: ProcessedFileResult[] = [];
     let processedCount = 0;
@@ -50,9 +50,9 @@ export class BatchProcessor {
 
       const batchPromises = batch.map(async (file): Promise<ProcessedFileResult> => {
         try {
-          const content = await fs.promises.readFile(file.absolutePath, 'utf-8');
+          const content = await fs.promises.readFile(file.absolutePath, "utf-8");
           const contentHash = BatchProcessor.computeContentHash(content);
-          const sizeBytes = Buffer.byteLength(content, 'utf-8');
+          const sizeBytes = Buffer.byteLength(content, "utf-8");
           const chunks = await this.chunker.chunkFile(file, content);
 
           return {
@@ -66,7 +66,7 @@ export class BatchProcessor {
           return {
             file,
             chunks: [],
-            contentHash: '',
+            contentHash: "",
             sizeBytes: 0,
             error: (error as Error).message || String(error),
           };

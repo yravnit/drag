@@ -14,7 +14,8 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "DRAG — Developer Repository Augmented Generation",
-  description: "AI assistant for software repositories. Index, search, and chat with your codebase.",
+  description:
+    "AI assistant for software repositories. Index, search, and chat with your codebase.",
 };
 
 export default function RootLayout({
@@ -23,10 +24,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html
-      lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-    >
+    <html lang="en" className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}>
       <body className="min-h-full flex flex-col">{children}</body>
     </html>
   );

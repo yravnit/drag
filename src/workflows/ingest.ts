@@ -1,10 +1,12 @@
-import fs from 'fs';
-import { GitHubArchiveRepositoryProvider } from '@/lib/ingestion/repositoryProvider';
-import { discoverRepositoryFiles, DiscoveredFile } from '@/lib/ingestion/fileFilter';
-import { TreeSitterParserManager } from '@/lib/ingestion/parserManager';
-import { BatchProcessor } from '@/lib/ingestion/batchProcessor';
-import { IngestionDatabaseLayer } from '@/lib/ingestion/dbLayer';
-import { GitHubApiClient } from '@/lib/ingestion/githubApiClient';
+import fs from "fs";
+import { GitHubArchiveRepositoryProvider } from "@/lib/ingestion/repositoryProvider";
+import { discoverRepositoryFiles, DiscoveredFile } from "@/lib/ingestion/fileFilter";
+import { TreeSitterParserManager } from "@/lib/ingestion/parserManager";
+import { BatchProcessor } from "@/lib/ingestion/batchProcessor";
+import { IngestionDatabaseLayer } from "@/lib/ingestion/dbLayer";
+import { GitHubApiClient } from "@/lib/ingestion/githubApiClient";
+import { start } from "workflow/api";
+import { embedRepository } from "@/workflows/embed";
 
 export interface IngestPayload {
   owner: string;
@@ -31,20 +33,25 @@ export interface IngestResult {
   isIncremental?: boolean;
 }
 
-interface AcquireResult {
-  metadata: import('@/lib/ingestion/repositoryProvider').RepositoryMetadata;
-  filesToProcess: DiscoveredFile[];
-  deletedFilePaths: string[];
-  repositoryId: string;
+// ─── Step 1: Run Ingestion (Acquire, Diff, Parse, Chunk, and Persist) ─────────
+
+async function runIngestionStep(
+  payload: IngestPayload,
+  batchSize: number,
+): Promise<{
   skipped: boolean;
+  repositoryId: string;
+  repositoryName: string;
+  owner: string;
+  url: string;
+  headCommitSha: string | null;
+  totalFilesDiscovered: number;
+  totalFilesProcessed: number;
+  totalChunksInserted: number;
+  skippedFilesCount: number;
   isIncremental: boolean;
-  totalDiscoveredCount: number;
-}
-
-// ─── Step 1: Acquire repository & compute per-file diff ────────────────────────
-
-async function acquireRepository(payload: IngestPayload): Promise<AcquireResult> {
-  'use step';
+}> {
+  "use step";
 
   const { owner, repo, authToken, revision, extraIgnorePatterns } = payload;
   const apiClient = new GitHubApiClient({ authToken });
@@ -55,7 +62,9 @@ async function acquireRepository(payload: IngestPayload): Promise<AcquireResult>
 
   try {
     const { metadata, workspacePath } = acquiredRepo;
-    console.log(`[Step 1] Repository acquired: ${metadata.name} (${metadata.owner}), HEAD: ${metadata.headCommitSha}`);
+    console.log(
+      `[Step] Repository acquired: ${metadata.name} (${metadata.owner}), HEAD: ${metadata.headCommitSha}`,
+    );
 
     const existingRepo = await dbLayer.getRepositoryByUrl(metadata.url);
 
@@ -66,33 +75,48 @@ async function acquireRepository(payload: IngestPayload): Promise<AcquireResult>
       metadata.headCommitSha &&
       existingRepo.headCommitSha === metadata.headCommitSha
     ) {
-      console.log(`[Step 1] HEAD SHA (${metadata.headCommitSha}) unchanged. Skipping repository ingestion.`);
+      console.log(
+        `[Step] HEAD SHA (${metadata.headCommitSha}) unchanged. Skipping repository ingestion.`,
+      );
       return {
-        metadata,
-        filesToProcess: [],
-        deletedFilePaths: [],
-        repositoryId: existingRepo.id,
         skipped: true,
+        repositoryId: existingRepo.id,
+        repositoryName: metadata.name,
+        owner: metadata.owner,
+        url: metadata.url,
+        headCommitSha: metadata.headCommitSha,
+        totalFilesDiscovered: 0,
+        totalFilesProcessed: 0,
+        totalChunksInserted: 0,
+        skippedFilesCount: 0,
         isIncremental: false,
-        totalDiscoveredCount: 0,
       };
     }
 
-    const allDiscoveredFiles = await discoverRepositoryFiles(workspacePath, { extraIgnorePatterns });
-    console.log(`[Step 1] Discovered ${allDiscoveredFiles.length} supported files.`);
+    const allDiscoveredFiles = await discoverRepositoryFiles(workspacePath, {
+      extraIgnorePatterns,
+    });
+    console.log(`[Step] Discovered ${allDiscoveredFiles.length} supported files.`);
+
+    const filesToProcess: DiscoveredFile[] = [];
+    const deletedFilePaths: string[] = [];
+    let isIncremental = false;
+    let repositoryId = existingRepo?.id || "";
 
     // Rule 5: Per-file Hash Diffing (repository_files tracking)
     if (existingRepo) {
+      isIncremental = true;
       const trackedFilesMap = await dbLayer.getRepositoryFiles(existingRepo.id);
-      console.log(`[Step 1] Incremental diffing against ${trackedFilesMap.size} previously tracked repository_files...`);
+      console.log(
+        `[Step] Incremental diffing against ${trackedFilesMap.size} previously tracked repository_files...`,
+      );
 
       const currentDiscoveredSet = new Set<string>();
-      const filesToProcess: DiscoveredFile[] = [];
 
       for (const file of allDiscoveredFiles) {
         currentDiscoveredSet.add(file.relativePath);
         try {
-          const content = await fs.promises.readFile(file.absolutePath, 'utf-8');
+          const content = await fs.promises.readFile(file.absolutePath, "utf-8");
           const currentHash = BatchProcessor.computeContentHash(content);
           const previousHash = trackedFilesMap.get(file.relativePath);
 
@@ -104,7 +128,6 @@ async function acquireRepository(payload: IngestPayload): Promise<AcquireResult>
         }
       }
 
-      const deletedFilePaths: string[] = [];
       for (const trackedPath of trackedFilesMap.keys()) {
         if (!currentDiscoveredSet.has(trackedPath)) {
           deletedFilePaths.push(trackedPath);
@@ -112,100 +135,98 @@ async function acquireRepository(payload: IngestPayload): Promise<AcquireResult>
       }
 
       if (filesToProcess.length === 0 && deletedFilePaths.length === 0) {
-        console.log(`[Step 1] All ${allDiscoveredFiles.length} file hashes match DB. Skipping re-indexing.`);
+        console.log(
+          `[Step] All ${allDiscoveredFiles.length} file hashes match DB. Skipping re-indexing.`,
+        );
         return {
-          metadata,
-          filesToProcess: [],
-          deletedFilePaths: [],
-          repositoryId: existingRepo.id,
           skipped: true,
+          repositoryId: existingRepo.id,
+          repositoryName: metadata.name,
+          owner: metadata.owner,
+          url: metadata.url,
+          headCommitSha: metadata.headCommitSha,
+          totalFilesDiscovered: allDiscoveredFiles.length,
+          totalFilesProcessed: 0,
+          totalChunksInserted: 0,
+          skippedFilesCount: 0,
           isIncremental: true,
-          totalDiscoveredCount: allDiscoveredFiles.length,
         };
       }
 
       console.log(
-        `[Step 1] Incremental hash diff: ${filesToProcess.length} modified/added files, ${deletedFilePaths.length} deleted files.`
+        `[Step] Incremental hash diff: ${filesToProcess.length} modified/added files, ${deletedFilePaths.length} deleted files.`,
       );
-
-      return {
-        metadata,
-        filesToProcess,
-        deletedFilePaths,
-        repositoryId: existingRepo.id,
-        skipped: false,
-        isIncremental: true,
-        totalDiscoveredCount: allDiscoveredFiles.length,
-      };
+    } else {
+      // Initial run: Full Indexing
+      repositoryId = await dbLayer.upsertRepository(metadata);
+      console.log(`[Step] Repository metadata upserted with ID: ${repositoryId}`);
+      filesToProcess.push(...allDiscoveredFiles);
     }
 
-    // Initial run: Full Indexing
-    const repositoryId = await dbLayer.upsertRepository(metadata);
-    console.log(`[Step 1] Repository metadata upserted with ID: ${repositoryId}`);
+    const parserManager = new TreeSitterParserManager();
+    const batchProcessor = new BatchProcessor(parserManager, { batchSize });
+
+    let processedFiles;
+    try {
+      processedFiles = await batchProcessor.processFiles(filesToProcess, (done, total) => {
+        console.log(`[Step] Processed ${done}/${total} files...`);
+      });
+    } finally {
+      parserManager.dispose();
+    }
+
+    const skippedFilesCount = processedFiles.filter((p) => p.error).length;
+    console.log(
+      `[Step] Batch complete. Succeeded: ${processedFiles.length - skippedFilesCount}, Skipped: ${skippedFilesCount}`,
+    );
+
+    let totalChunksInserted = 0;
+
+    if (isIncremental) {
+      const res = await dbLayer.saveIncrementalChunks(
+        repositoryId,
+        processedFiles,
+        deletedFilePaths,
+        metadata,
+      );
+      totalChunksInserted = res.totalChunksInserted;
+      console.log(`[Step] Incremental save complete: ${totalChunksInserted} new/updated chunks.`);
+    } else {
+      const res = await dbLayer.saveRepositoryChunks(repositoryId, processedFiles);
+      totalChunksInserted = res.totalChunksInserted;
+      console.log(
+        `[Step] Full save complete: Inserted ${totalChunksInserted} chunks into PostgreSQL.`,
+      );
+    }
 
     return {
-      metadata,
-      filesToProcess: allDiscoveredFiles,
-      deletedFilePaths: [],
-      repositoryId,
       skipped: false,
-      isIncremental: false,
-      totalDiscoveredCount: allDiscoveredFiles.length,
+      repositoryId,
+      repositoryName: metadata.name,
+      owner: metadata.owner,
+      url: metadata.url,
+      headCommitSha: metadata.headCommitSha,
+      totalFilesDiscovered: allDiscoveredFiles.length,
+      totalFilesProcessed: processedFiles.length - skippedFilesCount,
+      totalChunksInserted,
+      skippedFilesCount,
+      isIncremental,
     };
   } finally {
     await acquiredRepo.cleanup();
   }
 }
 
-// ─── Step 2: Parse, chunk, and persist files ────────────────────────────────
-
-async function parseAndPersist(
-  acquireInfo: AcquireResult,
-  batchSize: number
-) {
-  'use step';
-
-  if (acquireInfo.skipped) {
-    return { skippedFilesCount: 0, totalChunksInserted: 0, totalFilesProcessed: 0 };
-  }
-
-  const { repositoryId, filesToProcess, deletedFilePaths, isIncremental, metadata } = acquireInfo;
-
-  const dbLayer = new IngestionDatabaseLayer();
-  const parserManager = new TreeSitterParserManager();
-  const batchProcessor = new BatchProcessor(parserManager, { batchSize });
-
-  let processedFiles;
-  try {
-    processedFiles = await batchProcessor.processFiles(filesToProcess, (done, total) => {
-      console.log(`[Step 2] Processed ${done}/${total} files...`);
-    });
-  } finally {
-    parserManager.dispose();
-  }
-
-  const skippedFilesCount = processedFiles.filter((p) => p.error).length;
-  console.log(`[Step 2] Batch complete. Succeeded: ${processedFiles.length - skippedFilesCount}, Skipped: ${skippedFilesCount}`);
-
-  let totalChunksInserted = 0;
-
-  if (isIncremental) {
-    const res = await dbLayer.saveIncrementalChunks(repositoryId, processedFiles, deletedFilePaths, metadata);
-    totalChunksInserted = res.totalChunksInserted;
-    console.log(`[Step 2] Incremental save complete: ${totalChunksInserted} new/updated chunks.`);
-  } else {
-    const res = await dbLayer.saveRepositoryChunks(repositoryId, processedFiles);
-    totalChunksInserted = res.totalChunksInserted;
-    console.log(`[Step 2] Full save complete: Inserted ${totalChunksInserted} chunks into PostgreSQL.`);
-  }
-
-  return { skippedFilesCount, totalChunksInserted, totalFilesProcessed: processedFiles.length - skippedFilesCount };
+async function triggerEmbeddingsStep(repositoryId: string): Promise<void> {
+  "use step";
+  console.log(`[Step] Triggering embeddings workflow for repository ID: ${repositoryId}`);
+  await start(embedRepository, [{ repositoryId }]);
 }
 
 // ─── Workflow Orchestrator ──────────────────────────────────────────────────
 
 export async function ingestRepository(payload: IngestPayload): Promise<IngestResult> {
-  'use workflow';
+  "use workflow";
 
   if (!payload.owner || !payload.repo) {
     throw new Error('Missing required fields: "owner" and "repo"');
@@ -214,31 +235,18 @@ export async function ingestRepository(payload: IngestPayload): Promise<IngestRe
   const startTime = Date.now();
   console.log(`[Workflow] Starting ingestion for ${payload.owner}/${payload.repo}`);
 
-  // Step 1: Download, discover files, compute per-file hash diff, upsert metadata
-  const acquireInfo = await acquireRepository(payload);
+  const stepResult = await runIngestionStep(payload, payload.batchSize ?? 10);
 
-  // Step 2: Parse, chunk, and persist (skip if unchanged)
-  const { skippedFilesCount, totalChunksInserted, totalFilesProcessed } = await parseAndPersist(
-    acquireInfo,
-    payload.batchSize ?? 10
-  );
+  if (!stepResult.skipped && stepResult.repositoryId) {
+    await triggerEmbeddingsStep(stepResult.repositoryId);
+  }
 
   const durationMs = Date.now() - startTime;
   console.log(`[Workflow] Completed in ${durationMs}ms`);
 
   return {
     success: true,
-    skipped: acquireInfo.skipped,
-    repositoryId: acquireInfo.repositoryId,
-    repositoryName: acquireInfo.metadata.name,
-    owner: acquireInfo.metadata.owner,
-    url: acquireInfo.metadata.url,
-    headCommitSha: acquireInfo.metadata.headCommitSha,
-    totalFilesDiscovered: acquireInfo.totalDiscoveredCount,
-    totalFilesProcessed,
-    totalChunksInserted,
-    skippedFilesCount,
+    ...stepResult,
     durationMs,
-    isIncremental: acquireInfo.isIncremental,
   };
 }

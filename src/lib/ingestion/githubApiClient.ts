@@ -1,3 +1,5 @@
+import { serverEnv } from "@/data/serverEnv";
+
 export interface GitHubApiClientOptions {
   authToken?: string;
   maxRetries?: number;
@@ -24,7 +26,7 @@ export interface GitHubCommitResponse {
 
 export interface GitHubCompareFile {
   filename: string;
-  status: 'added' | 'modified' | 'removed' | 'renamed' | 'copied' | 'changed' | string;
+  status: "added" | "modified" | "removed" | "renamed" | "copied" | "changed" | string;
   previous_filename?: string;
 }
 
@@ -49,7 +51,7 @@ export class GitHubApiClient {
   private fetchFn: typeof fetch;
 
   constructor(options?: GitHubApiClientOptions) {
-    this.authToken = options?.authToken || process.env.GITHUB_TOKEN;
+    this.authToken = options?.authToken || serverEnv.GITHUB_TOKEN;
     this.maxRetries = options?.maxRetries ?? 3;
     this.baseDelayMs = options?.baseDelayMs ?? 1000;
     this.maxDelayMs = options?.maxDelayMs ?? 10000;
@@ -58,11 +60,11 @@ export class GitHubApiClient {
 
   private getHeaders(): Record<string, string> {
     const headers: Record<string, string> = {
-      'User-Agent': 'Vercel-Workflow-Ingestion-Engine',
-      'Accept': 'application/vnd.github+json',
+      "User-Agent": "Vercel-Workflow-Ingestion-Engine",
+      Accept: "application/vnd.github+json",
     };
     if (this.authToken) {
-      headers['Authorization'] = `Bearer ${this.authToken}`;
+      headers["Authorization"] = `Bearer ${this.authToken}`;
     }
     return headers;
   }
@@ -75,11 +77,11 @@ export class GitHubApiClient {
     if (error instanceof Error) {
       const msg = error.message.toLowerCase();
       return (
-        msg.includes('econnreset') ||
-        msg.includes('etimedout') ||
-        msg.includes('fetch failed') ||
-        msg.includes('network') ||
-        msg.includes('aborted')
+        msg.includes("econnreset") ||
+        msg.includes("etimedout") ||
+        msg.includes("fetch failed") ||
+        msg.includes("network") ||
+        msg.includes("aborted")
       );
     }
     return false;
@@ -107,7 +109,7 @@ export class GitHubApiClient {
 
         attempt++;
         let delay = this.baseDelayMs * Math.pow(2, attempt - 1);
-        const retryAfter = response.headers.get('Retry-After');
+        const retryAfter = response.headers.get("Retry-After");
         if (retryAfter) {
           const parsed = parseInt(retryAfter, 10);
           if (!isNaN(parsed)) {
@@ -119,7 +121,9 @@ export class GitHubApiClient {
         }
 
         delay = Math.min(delay, this.maxDelayMs);
-        console.warn(`[GitHubApiClient Warning] Status ${response.status} for ${url}. Retrying attempt ${attempt}/${this.maxRetries} after ${delay}ms...`);
+        console.warn(
+          `[GitHubApiClient Warning] Status ${response.status} for ${url}. Retrying attempt ${attempt}/${this.maxRetries} after ${delay}ms...`,
+        );
         await new Promise((resolve) => setTimeout(resolve, delay));
       } catch (error) {
         if (!this.isTransientError(error) || attempt >= this.maxRetries) {
@@ -128,9 +132,11 @@ export class GitHubApiClient {
         attempt++;
         const delay = Math.min(
           this.baseDelayMs * Math.pow(2, attempt - 1) + Math.floor(Math.random() * 500),
-          this.maxDelayMs
+          this.maxDelayMs,
         );
-        console.warn(`[GitHubApiClient Warning] Network error '${(error as Error).message}' for ${url}. Retrying attempt ${attempt}/${this.maxRetries} after ${delay}ms...`);
+        console.warn(
+          `[GitHubApiClient Warning] Network error '${(error as Error).message}' for ${url}. Retrying attempt ${attempt}/${this.maxRetries} after ${delay}ms...`,
+        );
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
@@ -155,7 +161,9 @@ export class GitHubApiClient {
     const url = `https://api.github.com/repos/${owner}/${repo}/commits/${ref}`;
     const res = await this.fetchWithRetry(url);
     if (!res.ok) {
-      throw new Error(`GitHub API returned status ${res.status} for commit ${owner}/${repo}@${ref}`);
+      throw new Error(
+        `GitHub API returned status ${res.status} for commit ${owner}/${repo}@${ref}`,
+      );
     }
     return (await res.json()) as GitHubCommitResponse;
   }
@@ -168,7 +176,7 @@ export class GitHubApiClient {
     owner: string,
     repo: string,
     base: string,
-    head: string
+    head: string,
   ): Promise<GitHubCompareResponse | null> {
     const url = `https://api.github.com/repos/${owner}/${repo}/compare/${base}...${head}`;
     const res = await this.fetchWithRetry(url);
@@ -183,7 +191,7 @@ export class GitHubApiClient {
    */
   public async downloadArchiveStream(owner: string, repo: string, ref: string): Promise<Response> {
     const url = `https://api.github.com/repos/${owner}/${repo}/tarball/${ref}`;
-    const res = await this.fetchWithRetry(url, { redirect: 'follow' });
+    const res = await this.fetchWithRetry(url, { redirect: "follow" });
     if (!res.ok || !res.body) {
       throw new Error(`Failed to download tarball from ${url}: Status ${res.status}`);
     }
