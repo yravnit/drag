@@ -1,4 +1,5 @@
 import fs from "fs";
+import path from "path";
 import { GitHubArchiveRepositoryProvider } from "@/lib/ingestion/repositoryProvider";
 import { discoverRepositoryFiles, DiscoveredFile } from "@/lib/ingestion/fileFilter";
 import { TreeSitterParserManager } from "@/lib/ingestion/parserManager";
@@ -165,12 +166,38 @@ async function runIngestionStep(
 
     const parserManager = new TreeSitterParserManager();
     const batchProcessor = new BatchProcessor(parserManager, { batchSize });
+    const processedFiles: any[] = [];
 
-    let processedFiles;
     try {
-      processedFiles = await batchProcessor.processFiles(filesToProcess, (done, total) => {
-        console.log(`[Step] Processed ${done}/${total} files...`);
-      });
+      const fileBatchSize = batchSize;
+      for (let i = 0; i < filesToProcess.length; i += fileBatchSize) {
+        const batch = filesToProcess.slice(i, i + fileBatchSize);
+        const batchResults = await batchProcessor.processFiles(batch);
+
+        for (const res of batchResults) {
+          if (res.error && !isIncremental) {
+            throw new Error(`Failed to process file ${res.file.relativePath}: ${res.error}`);
+          }
+
+          if (res.chunks && res.chunks.length > 0) {
+            const safeName = res.file.relativePath.replace(/[^a-zA-Z0-9.-]/g, "_");
+            const tempPath = path.join(
+              workspacePath,
+              `chunks_${safeName}_${Date.now()}_${Math.random().toString(36).substring(2, 9)}.json`,
+            );
+            await fs.promises.mkdir(path.dirname(tempPath), { recursive: true });
+            await fs.promises.writeFile(tempPath, JSON.stringify(res.chunks), "utf-8");
+            res.chunks = [];
+            (res as any).tempChunksPath = tempPath;
+          }
+
+          processedFiles.push(res);
+        }
+
+        console.log(
+          `[Step] Processed ${Math.min(i + fileBatchSize, filesToProcess.length)}/${filesToProcess.length} files...`,
+        );
+      }
     } finally {
       parserManager.dispose();
     }

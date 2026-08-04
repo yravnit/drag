@@ -12,6 +12,8 @@ export const repositories = snakeCase.table(
     primaryLanguage: text(),
     headCommitSha: text(),
     indexedAt: timestamp({ withTimezone: true }),
+    embeddingStatus: text(),
+    embeddingLeaseExpiresAt: timestamp({ withTimezone: true }),
     createdAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp({ withTimezone: true })
       .defaultNow()

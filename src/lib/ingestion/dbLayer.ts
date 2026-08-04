@@ -10,6 +10,19 @@ import {
 import { eq, inArray, and } from "drizzle-orm";
 import { RepositoryMetadata } from "./repositoryProvider";
 import { ProcessedFileResult } from "./batchProcessor";
+import fs from "fs";
+
+async function getChunksList(res: ProcessedFileResult): Promise<any[]> {
+  if (res.chunks && res.chunks.length > 0) {
+    return res.chunks;
+  }
+  const tempPath = (res as any).tempChunksPath;
+  if (tempPath && fs.existsSync(tempPath)) {
+    const data = await fs.promises.readFile(tempPath, "utf-8");
+    return JSON.parse(data);
+  }
+  return [];
+}
 
 export interface DatabaseLayerOptions {
   maxRetries?: number;
@@ -80,8 +93,16 @@ export class IngestionDatabaseLayer {
         attempt++;
         const isTransient = isTransientDatabaseError(error);
         if (!isTransient || attempt > this.maxRetries) {
+          let message = "Unknown error";
+          if (error instanceof Error) {
+            message = error.message;
+          } else if (error && typeof error === "object" && "message" in error) {
+            message = String((error as any).message);
+          } else if (error !== null && error !== undefined) {
+            message = String(error);
+          }
           throw new Error(
-            `[Database Error] Operation '${operationName}' failed (${isTransient ? "max retries reached" : "non-transient error"}): ${(error as Error).message}`,
+            `[Database Error] Operation '${operationName}' failed (${isTransient ? "max retries reached" : "non-transient error"}): ${message}`,
             { cause: error },
           );
         }
@@ -190,68 +211,81 @@ export class IngestionDatabaseLayer {
     repositoryId: string,
     processedFiles: ProcessedFileResult[],
   ): Promise<{ totalChunksInserted: number }> {
+    // Reject/abort the full replacement if any processing error exists to prevent partial commit
+    const hasErrors = processedFiles.some((res) => res.error);
+    if (hasErrors) {
+      const errorMsg = processedFiles
+        .filter((res) => res.error)
+        .map((res) => `${res.file.relativePath}: ${res.error}`)
+        .join(", ");
+      throw new Error(
+        `Cannot perform full repository replacement because some files failed to process: ${errorMsg}`,
+      );
+    }
+
     return this.withRetry("saveRepositoryChunks", async () => {
-      const allNewChunks: NewChunk[] = [];
-      const allNewFiles: NewRepositoryFile[] = [];
       const now = new Date();
-
-      for (const res of processedFiles) {
-        if (res.error) continue;
-
-        if (res.contentHash) {
-          allNewFiles.push({
-            repositoryId,
-            filePath: res.file.relativePath,
-            contentHash: res.contentHash,
-            sizeBytes: String(res.sizeBytes || 0),
-            indexedAt: now,
-          });
-        }
-
-        for (const rawChunk of res.chunks) {
-          allNewChunks.push({
-            repositoryId,
-            filePath: res.file.relativePath,
-            language: rawChunk.language,
-            chunkType: rawChunk.chunkType,
-            symbolName: rawChunk.symbolName,
-            startLine: rawChunk.startLine,
-            endLine: rawChunk.endLine,
-            text: rawChunk.text,
-            embedding: null,
-          });
-        }
-      }
+      let totalInserted = 0;
 
       await db.transaction(async (tx) => {
         // Delete previous chunks and file tracking records
         await tx.delete(chunks).where(eq(chunks.repositoryId, repositoryId));
         await tx.delete(repositoryFiles).where(eq(repositoryFiles.repositoryId, repositoryId));
 
-        // Insert repository_files records in batches
-        if (allNewFiles.length > 0) {
-          const FILE_BATCH_SIZE = 150;
-          for (let i = 0; i < allNewFiles.length; i += FILE_BATCH_SIZE) {
-            await tx
-              .insert(repositoryFiles)
-              .values(allNewFiles.slice(i, i + FILE_BATCH_SIZE))
-              .onConflictDoNothing();
+        let chunkBatch: NewChunk[] = [];
+        let fileBatch: NewRepositoryFile[] = [];
+        const BATCH_LIMIT = 150;
+
+        for (const res of processedFiles) {
+          if (res.error) continue;
+
+          if (res.contentHash) {
+            fileBatch.push({
+              repositoryId,
+              filePath: res.file.relativePath,
+              contentHash: res.contentHash,
+              sizeBytes: String(res.sizeBytes || 0),
+              indexedAt: now,
+            });
+          }
+
+          const fileChunks = await getChunksList(res);
+          for (const rawChunk of fileChunks) {
+            chunkBatch.push({
+              repositoryId,
+              filePath: res.file.relativePath,
+              language: rawChunk.language,
+              chunkType: rawChunk.chunkType,
+              symbolName: rawChunk.symbolName,
+              startLine: rawChunk.startLine,
+              endLine: rawChunk.endLine,
+              text: rawChunk.text,
+              embedding: null,
+            });
+            totalInserted++;
+
+            if (chunkBatch.length >= BATCH_LIMIT) {
+              await tx.insert(chunks).values(chunkBatch).onConflictDoNothing();
+              chunkBatch = [];
+            }
+          }
+
+          if (fileBatch.length >= BATCH_LIMIT) {
+            await tx.insert(repositoryFiles).values(fileBatch).onConflictDoNothing();
+            fileBatch = [];
           }
         }
 
-        // Insert chunk records in batches
-        if (allNewChunks.length > 0) {
-          const DB_BATCH_SIZE = 150;
-          for (let i = 0; i < allNewChunks.length; i += DB_BATCH_SIZE) {
-            await tx
-              .insert(chunks)
-              .values(allNewChunks.slice(i, i + DB_BATCH_SIZE))
-              .onConflictDoNothing();
-          }
+        // Flush remaining
+        if (chunkBatch.length > 0) {
+          await tx.insert(chunks).values(chunkBatch).onConflictDoNothing();
+        }
+        if (fileBatch.length > 0) {
+          await tx.insert(repositoryFiles).values(fileBatch).onConflictDoNothing();
         }
       });
 
-      return { totalChunksInserted: allNewChunks.length };
+      return { totalChunksInserted: totalInserted };
     });
   }
 
@@ -269,37 +303,14 @@ export class IngestionDatabaseLayer {
   ): Promise<{ totalChunksInserted: number; totalFilesProcessed: number }> {
     return this.withRetry("saveIncrementalChunks", async () => {
       const modifiedOrAddedPaths: string[] = [];
-      const newChunks: NewChunk[] = [];
-      const newFiles: NewRepositoryFile[] = [];
       const now = new Date();
+      let totalInserted = 0;
+      let totalFiles = 0;
 
       for (const res of processedFiles) {
         if (res.error) continue;
         modifiedOrAddedPaths.push(res.file.relativePath);
-
-        if (res.contentHash) {
-          newFiles.push({
-            repositoryId,
-            filePath: res.file.relativePath,
-            contentHash: res.contentHash,
-            sizeBytes: String(res.sizeBytes || 0),
-            indexedAt: now,
-          });
-        }
-
-        for (const rawChunk of res.chunks) {
-          newChunks.push({
-            repositoryId,
-            filePath: res.file.relativePath,
-            language: rawChunk.language,
-            chunkType: rawChunk.chunkType,
-            symbolName: rawChunk.symbolName,
-            startLine: rawChunk.startLine,
-            endLine: rawChunk.endLine,
-            text: rawChunk.text,
-            embedding: null,
-          });
-        }
+        totalFiles++;
       }
 
       const allPathsToDelete = Array.from(new Set([...deletedFilePaths, ...modifiedOrAddedPaths]));
@@ -324,26 +335,56 @@ export class IngestionDatabaseLayer {
           }
         }
 
-        // Insert new repository_files records for modified/added files
-        if (newFiles.length > 0) {
-          const FILE_BATCH_SIZE = 150;
-          for (let i = 0; i < newFiles.length; i += FILE_BATCH_SIZE) {
-            await tx
-              .insert(repositoryFiles)
-              .values(newFiles.slice(i, i + FILE_BATCH_SIZE))
-              .onConflictDoNothing();
+        let chunkBatch: NewChunk[] = [];
+        let fileBatch: NewRepositoryFile[] = [];
+        const BATCH_LIMIT = 150;
+
+        for (const res of processedFiles) {
+          if (res.error) continue;
+
+          if (res.contentHash) {
+            fileBatch.push({
+              repositoryId,
+              filePath: res.file.relativePath,
+              contentHash: res.contentHash,
+              sizeBytes: String(res.sizeBytes || 0),
+              indexedAt: now,
+            });
+          }
+
+          const fileChunks = await getChunksList(res);
+          for (const rawChunk of fileChunks) {
+            chunkBatch.push({
+              repositoryId,
+              filePath: res.file.relativePath,
+              language: rawChunk.language,
+              chunkType: rawChunk.chunkType,
+              symbolName: rawChunk.symbolName,
+              startLine: rawChunk.startLine,
+              endLine: rawChunk.endLine,
+              text: rawChunk.text,
+              embedding: null,
+            });
+            totalInserted++;
+
+            if (chunkBatch.length >= BATCH_LIMIT) {
+              await tx.insert(chunks).values(chunkBatch).onConflictDoNothing();
+              chunkBatch = [];
+            }
+          }
+
+          if (fileBatch.length >= BATCH_LIMIT) {
+            await tx.insert(repositoryFiles).values(fileBatch).onConflictDoNothing();
+            fileBatch = [];
           }
         }
 
-        // Insert new chunks for modified or added files
-        if (newChunks.length > 0) {
-          const DB_BATCH_SIZE = 150;
-          for (let i = 0; i < newChunks.length; i += DB_BATCH_SIZE) {
-            await tx
-              .insert(chunks)
-              .values(newChunks.slice(i, i + DB_BATCH_SIZE))
-              .onConflictDoNothing();
-          }
+        // Flush remaining
+        if (chunkBatch.length > 0) {
+          await tx.insert(chunks).values(chunkBatch).onConflictDoNothing();
+        }
+        if (fileBatch.length > 0) {
+          await tx.insert(repositoryFiles).values(fileBatch).onConflictDoNothing();
         }
 
         // Update repository metadata within the same transaction
@@ -358,8 +399,8 @@ export class IngestionDatabaseLayer {
       });
 
       return {
-        totalChunksInserted: newChunks.length,
-        totalFilesProcessed: processedFiles.length - processedFiles.filter((p) => p.error).length,
+        totalChunksInserted: totalInserted,
+        totalFilesProcessed: totalFiles,
       };
     });
   }

@@ -87,6 +87,7 @@ CREATE TABLE "repository_files" (
 CREATE INDEX "account_userId_idx" ON "account" ("user_id");--> statement-breakpoint
 CREATE INDEX "session_userId_idx" ON "session" ("user_id");--> statement-breakpoint
 CREATE INDEX "verification_identifier_idx" ON "verification" ("identifier");--> statement-breakpoint
+CREATE INDEX "repositories_owner_name_idx" ON "repositories" ("owner","name");--> statement-breakpoint
 CREATE INDEX "chunks_repository_id_idx" ON "chunks" ("repository_id");--> statement-breakpoint
 CREATE INDEX "chunks_file_path_idx" ON "chunks" ("file_path");--> statement-breakpoint
 CREATE UNIQUE INDEX "chunks_repo_file_lines_idx" ON "chunks" ("repository_id","file_path","start_line","end_line");--> statement-breakpoint

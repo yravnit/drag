@@ -348,12 +348,11 @@ npm run db:migrate
 
 ### Then implement (in order)
 
-1. **Embeddings Workflow** (`/api/workflows/embed`)
+1. **Embeddings Workflow** (`/api/workflows/embed`) — **DONE**
    - Reads chunks where `embedding IS NULL` for a `repositoryId`
-   - Calls OpenAI `text-embedding-3-small` (1536 dims) in batches
-   - Updates `chunks.embedding`
-   - Add `OPENAI_API_KEY` to `serverEnv.ts`
-   - Update `vector` column to `vector(1536)` and re-migrate first
+   - Calls NVIDIA NIM `nvidia/llama-nemotron-embed-1b-v2` (768 dims) in batches
+   - Updates `chunks.embedding` using `vector(768)` schema
+   - Configured with `NVIDIA_API_KEY` in `serverEnv.ts`
 
 2. **Retrieval Module** (`src/lib/retrieval/retriever.ts`)
    - `retrieveChunks(repositoryId, questionEmbedding, topK)` returning `Chunk[]`
@@ -403,11 +402,18 @@ npm run auth:generate-schema   # Regenerate auth schema (only if Better Auth ver
 
 ## 16. PR Review Changes (2026-08-04)
 
-The following issues were addressed in a triage pass:
+The following issues were addressed in a triage and resolution pass:
 
 | Fix | Files |
 |---|---|
-| `isCronAuthorized` helper with `crypto.timingSafeEqual` | `src/lib/cron/cronAuth.ts`, both cron routes |
+| `isCronAuthorized` helper timing-safe comparison, fail-closed tests | `src/lib/cron/cronAuth.ts`, `cronAuth.test.ts` |
+| Bounded chunk and file batch insertion inside database transactions | `src/lib/ingestion/dbLayer.ts` |
+| Early file processing error checking and fail-fast for full replacements | `src/lib/ingestion/dbLayer.ts`, `src/workflows/ingest.ts` |
+| Offload chunks of processed files to disk to prevent unbounded memory | `src/workflows/ingest.ts` |
+| Authentication, authorization, and rate limiting route guards for POST | `src/app/api/workflows/ingest-repository/route.ts` |
+| Unknown JSON body parsing and type-safety schema validation on payload | `src/app/api/workflows/ingest-repository/route.ts` |
+| Bounded atomic claim & lease locking mechanism on repositories | `src/app/api/cron/embed/route.ts`, schema & migration |
+| Release claim immediately on database if workflow startup fails | `src/app/api/cron/embed/route.ts` |
 | `vitest.config.ts` and `HANDOFF.md` removed from `.gitignore` | `.gitignore` |
 | `IngestPayload` imported from workflow module (no local duplicate) | `ingest-repository/route.ts` |
 | GitHub name format validation (`/^[\w.-]+$/`) on owner/repo | `ingest-repository/route.ts` |
@@ -432,10 +438,10 @@ The following issues were addressed in a triage pass:
 | `HANDOFF.md` added to `getLanguageForFile` as markdown | `fileFilter.ts` |
 | Composite index `(owner, name)` on repositories table | `repository.ts` |
 | Numeric status code word-boundary matching in `isTransientDatabaseError` | `dbLayer.ts` |
-| `{ cause: error }` preserved when wrapping errors | `dbLayer.ts`, `repositoryProvider.ts` |
+| `{ cause: error }` preserved when wrapping errors and normalized | `dbLayer.ts`, `repositoryProvider.ts` |
+| Removed unused catch variables resolving eslint warnings | `src/app/api/workflows/ingest-repository/route.ts` |
 
 **Skipped (with reasoning):**
-- Workflow POST auth (embed/ingest routes): These are Vercel Workflow SDK internal callbacks, not public APIs. Adding session auth would break cron-triggered ingestion.
 - `CREATE EXTENSION vector` in migration: Neon has pgvector pre-installed; baseline migration is a snapshot.
 - Cron sync branch fallback: Already consistent — `repo.defaultBranch || "main"` used for both `getCommit` and `start()`.
 - `public_repo` OAuth scope removal: Intentional per HANDOFF — required for private repo ingestion.
