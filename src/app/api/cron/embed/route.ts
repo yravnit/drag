@@ -76,11 +76,7 @@ export async function GET(request: Request) {
     // A failure on one repository must not abort remaining repositories.
     for (const repoId of claimedRepoIds) {
       try {
-        const run = await start(
-          embedRepository,
-          [{ repositoryId: repoId }],
-          { runId: `embed_${repoId}` }, // Idempotency runId
-        );
+        const run = await start(embedRepository, [{ repositoryId: repoId }]);
         runs.push({
           repositoryId: repoId,
           runId: run.runId,

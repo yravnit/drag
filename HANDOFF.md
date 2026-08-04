@@ -440,6 +440,7 @@ The following issues were addressed in a triage and resolution pass:
 | Numeric status code word-boundary matching in `isTransientDatabaseError` | `dbLayer.ts` |
 | `{ cause: error }` preserved when wrapping errors and normalized | `dbLayer.ts`, `repositoryProvider.ts` |
 | Removed unused catch variables resolving eslint warnings | `src/app/api/workflows/ingest-repository/route.ts` |
+| Removed invalid custom runId option from workflow start function to resolve type error and build failure | `src/app/api/cron/embed/route.ts` |
 
 **Skipped (with reasoning):**
 - `CREATE EXTENSION vector` in migration: Neon has pgvector pre-installed; baseline migration is a snapshot.
