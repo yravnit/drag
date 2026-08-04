@@ -148,8 +148,13 @@ const LOCKFILES = new Set([
   "poetry.lock",
   "cargo.lock",
   "pipfile.lock",
-  "AGENTS.md",
 ]);
+
+/**
+ * Files excluded by exact filename, independent of lockfile or extension rules.
+ * AGENTS.md contains agent-specific instructions and should not be indexed.
+ */
+const EXCLUDED_FILENAMES = new Set(["AGENTS.md"]);
 
 /**
  * Returns the language tag for a file path, or null if the file should be skipped.
@@ -179,7 +184,8 @@ export function getLanguageForFile(relativePath: string): DiscoveredFile["langua
     filename === "README.md" ||
     filename === "CONTRIBUTING.md" ||
     filename === "SECURITY.md" ||
-    filename === "CODE_OF_CONDUCT.md"
+    filename === "CODE_OF_CONDUCT.md" ||
+    filename === "HANDOFF.md"
   ) {
     return "markdown";
   }
@@ -268,7 +274,12 @@ export async function discoverRepositoryFiles(
         const filename = entry.name.toLowerCase();
         const ext = path.extname(filename);
 
-        if (LOCKFILES.has(entry.name) || LOCKFILES.has(filename) || IGNORED_EXTENSIONS.has(ext)) {
+        if (
+          LOCKFILES.has(entry.name) ||
+          LOCKFILES.has(filename) ||
+          EXCLUDED_FILENAMES.has(entry.name) ||
+          IGNORED_EXTENSIONS.has(ext)
+        ) {
           continue;
         }
 

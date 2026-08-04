@@ -3,6 +3,7 @@ import { db } from "@/db/db";
 import { repositories } from "@/db/schema";
 import { ingestRepository } from "@/workflows/ingest";
 import { GitHubApiClient } from "@/lib/ingestion/githubApiClient";
+import { isCronAuthorized } from "@/lib/cron/cronAuth";
 import { serverEnv } from "@/data/serverEnv";
 import { NextResponse } from "next/server";
 
@@ -19,11 +20,8 @@ import { NextResponse } from "next/server";
  */
 export async function GET(request: Request) {
   // Verify Vercel Cron authorization header in production
-  if (process.env.NODE_ENV === "production") {
-    const authHeader = request.headers.get("Authorization");
-    if (!authHeader || authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-      return new Response("Unauthorized", { status: 401 });
-    }
+  if (process.env.NODE_ENV === "production" && !isCronAuthorized(request)) {
+    return new Response("Unauthorized", { status: 401 });
   }
 
   try {

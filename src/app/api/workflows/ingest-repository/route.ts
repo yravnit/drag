@@ -1,21 +1,15 @@
 import { start } from "workflow/api";
-import { ingestRepository } from "@/workflows/ingest";
+import { ingestRepository, IngestPayload } from "@/workflows/ingest";
 import { NextResponse } from "next/server";
 
-export interface IngestPayload {
-  owner: string;
-  repo: string;
-  authToken?: string;
-  revision?: string;
-  batchSize?: number;
-  extraIgnorePatterns?: string[];
-}
+/** GitHub-allowed name format: alphanumeric, hyphens, underscores, dots (no path traversal). */
+const GITHUB_NAME_RE = /^[\w.-]+$/;
 
 /**
  * POST /api/workflows/ingest-repository
  *
  * Triggers the repository ingestion workflow.
- * Payload: { owner, repo, authToken?, revision?, batchSize?, extraIgnorePatterns? }
+ * Payload: { owner, repo, revision?, batchSize?, extraIgnorePatterns? }
  *
  * The Vercel Workflow SDK handles durability, retries, and observability.
  * Returns human-readable JSON error responses for invalid inputs or execution failures.
@@ -31,6 +25,16 @@ export async function POST(request: Request) {
       );
     }
 
+    if (!GITHUB_NAME_RE.test(body.owner) || !GITHUB_NAME_RE.test(body.repo)) {
+      return NextResponse.json(
+        {
+          error:
+            'Invalid "owner" or "repo": must match GitHub name format (alphanumeric, hyphens, underscores, dots only)',
+        },
+        { status: 400 },
+      );
+    }
+
     const run = await start(ingestRepository, [body]);
 
     return NextResponse.json({
@@ -41,9 +45,6 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     console.error("[API Error] Ingestion route failed:", error);
-    return NextResponse.json(
-      { error: (error as Error).message || "Failed to start ingestion workflow" },
-      { status: 500 },
-    );
+    return NextResponse.json({ error: "Failed to start ingestion workflow" }, { status: 500 });
   }
 }

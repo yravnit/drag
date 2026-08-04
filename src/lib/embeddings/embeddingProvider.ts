@@ -6,7 +6,7 @@ export interface CreateEmbeddingsOptions {
   dimensions?: number;
   model?: string;
   inputType?: "passage" | "query";
-  truncate?: "NONE" | "END";
+  truncate?: "NONE" | "START" | "END";
 }
 
 export interface EmbeddingResult {
@@ -14,6 +14,12 @@ export interface EmbeddingResult {
   model: string;
   dimensions: number;
   totalTokens?: number;
+}
+
+/** NVIDIA NIM-specific extra parameters passed alongside the OpenAI-compatible body. */
+interface NvidiaEmbeddingParams {
+  input_type: string;
+  truncate: string;
 }
 
 export class NimEmbeddingProvider {
@@ -39,6 +45,9 @@ export class NimEmbeddingProvider {
     this.client = new OpenAI({
       apiKey: resolvedApiKey,
       baseURL: resolvedBaseUrl,
+      // Generous timeout for batched embedding requests to NVIDIA NIM (slow cold-start)
+      timeout: 120_000,
+      maxRetries: 2,
     });
 
     return this.client;
@@ -57,19 +66,24 @@ export class NimEmbeddingProvider {
 
     const inputList = Array.isArray(options.input) ? options.input : [options.input];
 
+    const nvidiaParams: NvidiaEmbeddingParams = {
+      input_type: inputType,
+      truncate,
+    };
+
     try {
       const response = await client.embeddings.create({
         model,
         input: inputList,
         dimensions,
         encoding_format: "float",
-        ...({
-          input_type: inputType,
-          truncate,
-        } as any),
+        ...(nvidiaParams as unknown as Record<string, unknown>),
       });
 
-      const embeddings = response.data.map((item) => item.embedding);
+      // Sort by index to guarantee embeddings[i] corresponds to inputList[i],
+      // since the NVIDIA NIM API may return items in a different order.
+      const sorted = [...response.data].sort((a, b) => a.index - b.index);
+      const embeddings = sorted.map((item) => item.embedding);
 
       return {
         embeddings,
@@ -77,8 +91,9 @@ export class NimEmbeddingProvider {
         dimensions,
         totalTokens: response.usage?.total_tokens,
       };
-    } catch (error: any) {
-      if (error?.status === 403 || error?.statusCode === 403) {
+    } catch (error: unknown) {
+      const err = error as { status?: number; statusCode?: number; message?: string };
+      if (err?.status === 403 || err?.statusCode === 403) {
         throw new Error(
           `NVIDIA NIM API Authorization failed (HTTP 403 Forbidden): Invalid or expired NVIDIA_API_KEY. Please verify your API key at https://build.nvidia.com and update NVIDIA_API_KEY in .env.`,
         );

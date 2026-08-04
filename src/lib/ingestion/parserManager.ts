@@ -17,6 +17,22 @@ export type SupportedLanguage =
   | "c"
   | "php";
 
+/** Maps normalized language tags to their tree-sitter-wasms filenames. */
+const WASM_FILE_NAME_MAP: Record<string, string> = {
+  typescript: "tree-sitter-typescript.wasm",
+  tsx: "tree-sitter-tsx.wasm",
+  javascript: "tree-sitter-javascript.wasm",
+  python: "tree-sitter-python.wasm",
+  go: "tree-sitter-go.wasm",
+  rust: "tree-sitter-rust.wasm",
+  java: "tree-sitter-java.wasm",
+  kotlin: "tree-sitter-kotlin.wasm",
+  csharp: "tree-sitter-c_sharp.wasm",
+  cpp: "tree-sitter-cpp.wasm",
+  c: "tree-sitter-c.wasm",
+  php: "tree-sitter-php.wasm",
+};
+
 let globalInitPromise: Promise<void> | null = null;
 
 export class TreeSitterParserManager {
@@ -56,22 +72,7 @@ export class TreeSitterParserManager {
     }
 
     const loadPromise = (async () => {
-      const wasmFileNameMap: Record<string, string> = {
-        typescript: "tree-sitter-typescript.wasm",
-        tsx: "tree-sitter-tsx.wasm",
-        javascript: "tree-sitter-javascript.wasm",
-        python: "tree-sitter-python.wasm",
-        go: "tree-sitter-go.wasm",
-        rust: "tree-sitter-rust.wasm",
-        java: "tree-sitter-java.wasm",
-        kotlin: "tree-sitter-kotlin.wasm",
-        csharp: "tree-sitter-c_sharp.wasm",
-        cpp: "tree-sitter-cpp.wasm",
-        c: "tree-sitter-c.wasm",
-        php: "tree-sitter-php.wasm",
-      };
-
-      const wasmFileName = wasmFileNameMap[normLang];
+      const wasmFileName = WASM_FILE_NAME_MAP[normLang];
       if (!wasmFileName) {
         throw new Error(`Unsupported tree-sitter language grammar: '${language}'`);
       }
@@ -107,6 +108,8 @@ export class TreeSitterParserManager {
    * Helper that executes a parsing task with an isolated, single-use Parser instance.
    * Guarantees parser cleanup via parser.delete() in a finally block.
    * Never shares Parser instances across concurrent tasks.
+   *
+   * If setLanguage() fails, the parser is deleted immediately to avoid leaking the instance.
    */
   public async withParser<T>(
     language: SupportedLanguage,
@@ -114,7 +117,18 @@ export class TreeSitterParserManager {
   ): Promise<T> {
     const langObj = await this.getLanguage(language);
     const parser = new Parser();
-    parser.setLanguage(langObj);
+
+    try {
+      parser.setLanguage(langObj);
+    } catch (err) {
+      // If setting the language fails, release the parser immediately before re-throwing.
+      try {
+        parser.delete();
+      } catch {
+        // Ignore deletion errors
+      }
+      throw err;
+    }
 
     try {
       return await fn(parser);

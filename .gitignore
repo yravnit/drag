@@ -13,7 +13,6 @@
 # testing
 /coverage
 **/__tests__/
-vitest.config.ts
 /src/lib/ingestion/test-workflow.ts
 
 # next.js
@@ -45,5 +44,4 @@ next-env.d.ts
 
 # project requirements
 project.list.md
-HANDOFF.md
 /.swc

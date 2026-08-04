@@ -121,6 +121,7 @@ export class GitHubArchiveRepositoryProvider implements RepositoryProvider {
       }
       throw new Error(
         `Failed to acquire repository archive for ${owner}/${repo}@${targetRevision}: ${(error as Error).message}`,
+        { cause: error },
       );
     }
   }

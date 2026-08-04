@@ -10,9 +10,9 @@ import {
 } from "drizzle-orm/pg-core";
 import { repositories } from "./repository";
 
-// drizzle-kit loads schema files outside the Next.js runtime, so we cannot use
-// serverEnv / @t3-oss/env-nextjs here. Read the env var directly with a safe fallback.
-const embeddingDimensions = Number(process.env.EMBEDDING_DIMENSIONS ?? 768);
+// Embedding dimension is fixed at 768 to match vector(768) in the migration SQL and HNSW index.
+// Do not change without a corresponding DB migration and snapshot regeneration.
+export const EMBEDDING_DIMENSIONS = 768;
 
 export const chunks = snakeCase.table(
   "chunks",
@@ -28,7 +28,7 @@ export const chunks = snakeCase.table(
     startLine: integer().notNull(),
     endLine: integer().notNull(),
     text: text().notNull(),
-    embedding: vector({ dimensions: embeddingDimensions }),
+    embedding: vector({ dimensions: EMBEDDING_DIMENSIONS }),
     createdAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp({ withTimezone: true })
       .defaultNow()

@@ -28,9 +28,6 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     console.error("[API Error] Embeddings route failed:", error);
-    return NextResponse.json(
-      { error: (error as Error).message || "Failed to start embeddings workflow" },
-      { status: 500 },
-    );
+    return NextResponse.json({ error: "Failed to start embeddings workflow" }, { status: 500 });
   }
 }

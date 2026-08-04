@@ -71,6 +71,25 @@ export class SemanticChunker {
     // Use withParser to guarantee isolated parser instance per file and automatic disposal via try/finally
     return await this.parserManager.withParser(lang, (parser) => {
       const tree = parser.parse(content);
+
+      // parser.parse() can return null when parsing fails or times out
+      if (!tree) {
+        console.warn(
+          `[SemanticChunker] parser.parse() returned null for file: ${file.relativePath}. Using fallback module chunk.`,
+        );
+        const lines = content.split("\n");
+        return [
+          {
+            chunkType: "module" as const,
+            symbolName: null,
+            startLine: 1,
+            endLine: Math.max(1, lines.length),
+            text: content,
+            language: file.language,
+          },
+        ];
+      }
+
       const lines = content.split("\n");
 
       if (lang === "python") {

@@ -50,13 +50,13 @@ export function isTransientDatabaseError(error: unknown): boolean {
     "connection reset",
     "timeout",
     "network error",
-    "502",
-    "503",
-    "504",
-    "429",
   ];
+  // Numeric HTTP status codes matched as whole words to avoid false substring matches
+  const transientStatusCodes = [502, 503, 504, 429];
 
-  return transientKeywords.some((kw) => message.includes(kw));
+  if (transientKeywords.some((kw) => message.includes(kw))) return true;
+  if (transientStatusCodes.some((code) => new RegExp(`\\b${code}\\b`).test(message))) return true;
+  return false;
 }
 
 export class IngestionDatabaseLayer {
@@ -82,6 +82,7 @@ export class IngestionDatabaseLayer {
         if (!isTransient || attempt > this.maxRetries) {
           throw new Error(
             `[Database Error] Operation '${operationName}' failed (${isTransient ? "max retries reached" : "non-transient error"}): ${(error as Error).message}`,
+            { cause: error },
           );
         }
         const delay = this.retryDelayMs * Math.pow(2, attempt - 1);
