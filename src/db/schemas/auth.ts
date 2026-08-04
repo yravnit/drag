@@ -71,7 +71,3 @@ export const verification = pgTable(
   },
   (table) => [index("verification_identifier_idx").on(table.identifier)],
 );
-
-// ponytail: Removed Drizzle relationship definitions to keep schema minimal and avoid API conflicts with Drizzle v1.0-rc.
-// Ceiling: Centralized relational query abstractions (e.g. db.query.user.findFirst({ with: { sessions: true } })) will fail.
-// Upgrade Path: Define relational maps in a centralized relations.ts file using the new Drizzle v1.0.0-rc defineRelations syntax.

@@ -12,6 +12,8 @@
 
 # testing
 /coverage
+**/__tests__/
+/src/lib/ingestion/test-workflow.ts
 
 # next.js
 /.next/
@@ -42,3 +44,4 @@ next-env.d.ts
 
 # project requirements
 project.list.md
+/.swc

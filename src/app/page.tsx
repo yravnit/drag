@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { signIn, signOut, useSession } from "@/lib/auth-client";
+import { signIn, signOut, useSession } from "@/lib/auth/client";
 
 export default function Home() {
   const { data: session, isPending } = useSession();
@@ -26,7 +26,6 @@ export default function Home() {
       {/* Main card */}
       <div className="relative z-10 w-full max-w-md px-6">
         <div className="overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900/40 p-8 shadow-2xl backdrop-blur-xl transition-all duration-500 hover:border-zinc-700/60">
-          
           {/* Header */}
           <div className="flex flex-col items-center text-center">
             <div className="mb-6 flex h-12 w-12 items-center justify-center rounded-xl bg-zinc-800/80 border border-zinc-700/50 shadow-inner">
@@ -44,12 +43,8 @@ export default function Home() {
                 />
               </svg>
             </div>
-            <h1 className="text-2xl font-bold tracking-tight text-white">
-              Drag SignIn
-            </h1>
-            <p className="mt-2 text-sm text-zinc-400">
-              Auth gateway
-            </p>
+            <h1 className="text-2xl font-bold tracking-tight text-white">Drag SignIn</h1>
+            <p className="mt-2 text-sm text-zinc-400">Auth gateway</p>
           </div>
 
           <div className="mt-8 border-t border-zinc-800/80 pt-6">
@@ -84,12 +79,8 @@ export default function Home() {
                 </div>
 
                 <div className="text-center">
-                  <h2 className="text-lg font-medium text-white">
-                    {session.user.name}
-                  </h2>
-                  <p className="text-xs text-zinc-500 mt-0.5">
-                    {session.user.email}
-                  </p>
+                  <h2 className="text-lg font-medium text-white">{session.user.name}</h2>
+                  <p className="text-xs text-zinc-500 mt-0.5">{session.user.email}</p>
                 </div>
 
                 <button
@@ -133,7 +124,7 @@ export default function Home() {
             )}
           </div>
         </div>
-        
+
         {/* Footer */}
       </div>
     </div>

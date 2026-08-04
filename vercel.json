@@ -1,0 +1,13 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/sync",
+      "schedule": "30 18 * * 5"
+    },
+    {
+      "path": "/api/cron/embed",
+      "schedule": "0 19 * * 5"
+    }
+  ]
+}
+
