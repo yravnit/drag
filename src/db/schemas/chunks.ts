@@ -29,6 +29,8 @@ export const chunks = snakeCase.table(
     endLine: integer().notNull(),
     text: text().notNull(),
     embedding: vector({ dimensions: EMBEDDING_DIMENSIONS }),
+    embeddingProvider: text("embedding_provider"),
+    embeddingModel: text("embedding_model"),
     createdAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp({ withTimezone: true })
       .defaultNow()

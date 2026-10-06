@@ -35,6 +35,12 @@ const WASM_FILE_NAME_MAP: Record<string, string> = {
 
 let globalInitPromise: Promise<void> | null = null;
 
+/**
+ * Maximum number of cached Language objects. With 13 source languages this is
+ * rarely hit, but it bounds memory on Hobby-tier's 1024 MB limit.
+ */
+const MAX_CACHED_LANGUAGES = 16;
+
 export class TreeSitterParserManager {
   private languageCache: Map<string, Parser.Language> = new Map();
   private languageLoadPromises: Map<string, Promise<Parser.Language>> = new Map();
@@ -92,6 +98,22 @@ export class TreeSitterParserManager {
       }
 
       const loadedLang = await Parser.Language.load(wasmPath);
+
+      // LRU eviction: if cache is full, evict the oldest entry (first insertion order key)
+      if (this.languageCache.size >= MAX_CACHED_LANGUAGES) {
+        const oldestKey = this.languageCache.keys().next().value;
+        if (oldestKey !== undefined) {
+          const oldLang = this.languageCache.get(oldestKey);
+          this.languageCache.delete(oldestKey);
+          try {
+            const obj = oldLang as unknown as Record<string, unknown>;
+            if (typeof obj?.delete === "function") obj.delete();
+          } catch {
+            // Ignore deletion errors
+          }
+        }
+      }
+
       this.languageCache.set(normLang, loadedLang);
       return loadedLang;
     })();

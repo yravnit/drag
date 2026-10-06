@@ -1,7 +1,6 @@
 import { start } from "workflow/api";
 import { db } from "@/db/db";
-import { chunks, repositories } from "@/db/schema";
-import { isNull, and, or, ne, lt, eq, inArray } from "drizzle-orm";
+import { findRepositoriesWithPendingEmbeddings } from "@/lib/leases/repositoryLeases";
 import { embedRepository } from "@/workflows/embed";
 import { isCronAuthorized } from "@/lib/cron/cronAuth";
 import { NextResponse } from "next/server";
@@ -20,54 +19,16 @@ export async function GET(request: Request) {
 
   try {
     const BATCH_SIZE = 5; // Keep processing bounded
-    const now = new Date();
-    const leaseDurationMs = 10 * 60 * 1000; // 10-minute lease
-    const leaseExpiry = new Date(now.getTime() + leaseDurationMs);
+    const eligible = await findRepositoriesWithPendingEmbeddings(db, BATCH_SIZE);
 
-    // Atomically claim a batch of repositories
-    const claimedRepoIds = await db.transaction(async (tx) => {
-      const eligible = await tx
-        .selectDistinct({ id: repositories.id })
-        .from(repositories)
-        .innerJoin(chunks, eq(chunks.repositoryId, repositories.id))
-        .where(
-          and(
-            isNull(chunks.embedding),
-            or(
-              isNull(repositories.embeddingStatus),
-              ne(repositories.embeddingStatus, "processing"),
-              isNull(repositories.embeddingLeaseExpiresAt),
-              lt(repositories.embeddingLeaseExpiresAt, now),
-            ),
-          ),
-        )
-        .limit(BATCH_SIZE)
-        .for("update", { skipLocked: true });
-
-      if (eligible.length === 0) {
-        return [];
-      }
-
-      const ids = eligible.map((r) => r.id);
-
-      await tx
-        .update(repositories)
-        .set({
-          embeddingStatus: "processing",
-          embeddingLeaseExpiresAt: leaseExpiry,
-          updatedAt: now,
-        })
-        .where(inArray(repositories.id, ids));
-
-      return ids;
-    });
-
-    if (claimedRepoIds.length === 0) {
+    if (eligible.length === 0) {
       return NextResponse.json({
         message: "No pending embeddings to process",
         triggered: [],
       });
     }
+
+    const claimedRepoIds = eligible.map((r) => r.id);
 
     const runs: Array<{ repositoryId: string; runId: string }> = [];
     const failures: Array<{ repositoryId: string; error: string }> = [];
@@ -90,20 +51,6 @@ export async function GET(request: Request) {
           repositoryId: repoId,
           error: (error as Error).message || "Unknown error",
         });
-
-        // Release claim immediately on failure so it can be retried by the next run
-        try {
-          await db
-            .update(repositories)
-            .set({
-              embeddingStatus: "failed",
-              embeddingLeaseExpiresAt: new Date(0),
-              updatedAt: new Date(),
-            })
-            .where(eq(repositories.id, repoId));
-        } catch (dbErr) {
-          console.error(`[Cron Error] Failed to release claim for repository ${repoId}:`, dbErr);
-        }
       }
     }
 

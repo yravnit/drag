@@ -2,12 +2,15 @@
   "crons": [
     {
       "path": "/api/cron/sync",
-      "schedule": "30 18 * * 5"
+      "schedule": "0 6 * * *"
     },
     {
       "path": "/api/cron/embed",
-      "schedule": "0 19 * * 5"
+      "schedule": "0 18 * * *"
+    },
+    {
+      "path": "/api/cron/nvidia-models",
+      "schedule": "0 0 * * 0"
     }
   ]
 }
-

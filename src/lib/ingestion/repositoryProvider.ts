@@ -7,6 +7,7 @@ import * as tar from "tar";
 import { GitHubApiClient } from "./githubApiClient";
 
 export interface RepositoryMetadata {
+  githubId?: bigint | number | null;
   name: string;
   owner: string;
   url: string;
@@ -15,6 +16,10 @@ export interface RepositoryMetadata {
   primaryLanguage: string | null;
   headCommitSha: string | null;
   revision?: string;
+  isPrivate?: boolean;
+  embeddingProvider?: string | null;
+  embeddingModel?: string | null;
+  embeddingDimensions?: number | null;
 }
 
 export interface AcquiredRepository {
@@ -58,6 +63,7 @@ export class GitHubArchiveRepositoryProvider implements RepositoryProvider {
     const repoData = await client.getRepository(owner, repo);
     const defaultBranch = repoData.default_branch || "main";
     const repoUrl = repoData.html_url || `https://github.com/${owner}/${repo}`;
+    const githubId = repoData.id ? BigInt(repoData.id) : null;
 
     // Target revision (branch, tag, or commit SHA; defaults to default_branch)
     const targetRevision = opts.revision || defaultBranch;
@@ -72,6 +78,7 @@ export class GitHubArchiveRepositoryProvider implements RepositoryProvider {
     }
 
     const metadata: RepositoryMetadata = {
+      githubId,
       name: repoData.name || repo,
       owner: repoData.owner?.login || owner,
       url: repoUrl,
@@ -80,6 +87,7 @@ export class GitHubArchiveRepositoryProvider implements RepositoryProvider {
       primaryLanguage: repoData.language || null,
       headCommitSha,
       revision: targetRevision,
+      isPrivate: Boolean(repoData.private),
     };
 
     // 3. Create Unique Temporary Workspace

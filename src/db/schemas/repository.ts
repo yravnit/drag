@@ -1,9 +1,10 @@
-import { uuid, text, timestamp, index, snakeCase } from "drizzle-orm/pg-core";
+import { uuid, text, timestamp, index, snakeCase, bigint, boolean, integer } from "drizzle-orm/pg-core";
 
 export const repositories = snakeCase.table(
   "repositories",
   {
     id: uuid().defaultRandom().primaryKey(),
+    githubId: bigint("github_id", { mode: "bigint" }).unique(),
     name: text().notNull(),
     owner: text().notNull(),
     url: text().notNull().unique(),
@@ -11,9 +12,16 @@ export const repositories = snakeCase.table(
     description: text(),
     primaryLanguage: text(),
     headCommitSha: text(),
+    isPrivate: boolean("is_private").default(false).notNull(),
+    embeddingProvider: text("embedding_provider"),
+    embeddingModel: text("embedding_model"),
+    embeddingDimensions: integer("embedding_dimensions").default(768),
     indexedAt: timestamp({ withTimezone: true }),
     embeddingStatus: text(),
     embeddingLeaseExpiresAt: timestamp({ withTimezone: true }),
+    nextSyncAt: timestamp({ withTimezone: true }),
+    syncStatus: text(),
+    syncLeaseExpiresAt: timestamp({ withTimezone: true }),
     createdAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp({ withTimezone: true })
       .defaultNow()

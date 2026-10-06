@@ -1,8 +1,10 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { customSession } from "better-auth/plugins";
 import { db } from "@/db/db";
 import { serverEnv } from "@/data/serverEnv";
 import * as schema from "@/db/schema";
+import { GITHUB_ACCESS_SCOPES, getUserAccessMode } from "./accessMode";
 
 export const auth = betterAuth({
   database: drizzleAdapter(db, {
@@ -13,9 +15,21 @@ export const auth = betterAuth({
     github: {
       clientId: serverEnv.GITHUB_CLIENT_ID,
       clientSecret: serverEnv.GITHUB_CLIENT_SECRET,
-      scope: ["public_repo"],
+      scope: [...GITHUB_ACCESS_SCOPES.public],
     },
   },
+  plugins: [
+    customSession(async ({ session, user }) => {
+      const accessMode = await getUserAccessMode(db, user.id);
+      return {
+        session,
+        user: {
+          ...user,
+          accessMode,
+        },
+      };
+    }),
+  ],
   account: {
     encryptOAuthTokens: true,
   },

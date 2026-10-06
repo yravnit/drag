@@ -16,13 +16,23 @@ export interface EmbeddingResult {
   totalTokens?: number;
 }
 
+export interface EmbeddingProvider {
+  readonly name: string;
+  readonly model: string;
+  readonly dimensions: number;
+  generateEmbeddings(options: CreateEmbeddingsOptions): Promise<EmbeddingResult>;
+}
+
 /** NVIDIA NIM-specific extra parameters passed alongside the OpenAI-compatible body. */
 interface NvidiaEmbeddingParams {
   input_type: string;
   truncate: string;
 }
 
-export class NimEmbeddingProvider {
+export class NimEmbeddingProvider implements EmbeddingProvider {
+  public readonly name = "nvidia";
+  public readonly model = EMBEDDING_CONFIG.model;
+  public readonly dimensions = EMBEDDING_CONFIG.dimensions;
   private client: OpenAI | null = null;
 
   constructor(
@@ -116,3 +126,34 @@ export async function generateEmbeddings(
     ...options,
   });
 }
+
+/**
+ * In-memory mock embedding provider for tests and local development.
+ */
+export class MockEmbeddingProvider implements EmbeddingProvider {
+  public readonly name = "mock";
+  public readonly model = "mock-embedding-model";
+  public readonly dimensions = EMBEDDING_CONFIG.dimensions;
+
+  constructor(
+    private readonly mockFn?: (options: CreateEmbeddingsOptions) => Promise<EmbeddingResult>,
+  ) {}
+
+  async generateEmbeddings(options: CreateEmbeddingsOptions): Promise<EmbeddingResult> {
+    if (this.mockFn) {
+      return this.mockFn(options);
+    }
+    const inputs = Array.isArray(options.input) ? options.input : [options.input];
+    const dimensions = options.dimensions ?? EMBEDDING_CONFIG.dimensions;
+    return {
+      embeddings: inputs.map(() => Array.from({ length: dimensions }, () => 0)),
+      model: options.model ?? "mock-embedding-model",
+      dimensions,
+    };
+  }
+}
+
+export * from "./geminiEmbeddingProvider";
+export * from "./cloudflareEmbeddingProvider";
+export * from "./router";
+

@@ -139,6 +139,26 @@ const IGNORED_EXTENSIONS = new Set([
   ".ttf",
   ".eot",
   ".otf",
+  // Certificates & Keys
+  ".pem",
+  ".key",
+  ".p12",
+  ".pfx",
+  ".crt",
+  ".cer",
+  ".der",
+  ".kdbx",
+]);
+
+export const SENSITIVE_EXTENSIONS = new Set([
+  ".pem",
+  ".key",
+  ".p12",
+  ".pfx",
+  ".crt",
+  ".cer",
+  ".der",
+  ".kdbx",
 ]);
 
 const LOCKFILES = new Set([
@@ -157,9 +177,77 @@ const LOCKFILES = new Set([
 const EXCLUDED_FILENAMES = new Set(["AGENTS.md"]);
 
 /**
+ * Checks whether file content contains private keys or sensitive credentials.
+ */
+export function isSensitiveContent(content: string): boolean {
+  if (!content || typeof content !== "string") {
+    return false;
+  }
+
+  const privateKeyPattern = /-----BEGIN(?: [A-Z0-9_-]+)? PRIVATE KEY-----/i;
+  const pgpPrivateKeyPattern = /-----BEGIN PGP PRIVATE KEY BLOCK-----/i;
+  const certPattern = /-----BEGIN CERTIFICATE-----/i;
+
+  return (
+    privateKeyPattern.test(content) ||
+    pgpPrivateKeyPattern.test(content) ||
+    certPattern.test(content)
+  );
+}
+
+/**
+ * Checks whether a file path or its content represents a sensitive secret file.
+ */
+export function isSensitiveFile(relativePath: string, content?: string): boolean {
+  const normPath = relativePath.replace(/\\/g, "/");
+  const filename = path.basename(normPath).toLowerCase();
+  const ext = path.extname(normPath).toLowerCase();
+
+  if (SENSITIVE_EXTENSIONS.has(ext)) {
+    return true;
+  }
+
+  if (filename === ".env" || filename.startsWith(".env.")) {
+    return true;
+  }
+
+  if (
+    filename === "id_rsa" ||
+    filename === "id_rsa.pub" ||
+    filename === "id_ed25519" ||
+    filename === "id_ed25519.pub" ||
+    filename === "id_dsa" ||
+    filename === "id_ecdsa"
+  ) {
+    return true;
+  }
+
+  if (
+    filename === "credentials.json" ||
+    filename === "auth.json" ||
+    filename === "token.json" ||
+    /^client_secret.*\.json$/i.test(filename) ||
+    /^service[-_]account.*\.json$/i.test(filename) ||
+    /^service[-_]account.*\.(yaml|yml)$/i.test(filename)
+  ) {
+    return true;
+  }
+
+  if (content && isSensitiveContent(content)) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Returns the language tag for a file path, or null if the file should be skipped.
  */
 export function getLanguageForFile(relativePath: string): DiscoveredFile["language"] | null {
+  if (isSensitiveFile(relativePath)) {
+    return null;
+  }
+
   const normPath = relativePath.replace(/\\/g, "/");
   const filename = path.basename(normPath);
   const ext = path.extname(normPath).toLowerCase();
@@ -278,7 +366,8 @@ export async function discoverRepositoryFiles(
           LOCKFILES.has(entry.name) ||
           LOCKFILES.has(filename) ||
           EXCLUDED_FILENAMES.has(entry.name) ||
-          IGNORED_EXTENSIONS.has(ext)
+          IGNORED_EXTENSIONS.has(ext) ||
+          isSensitiveFile(relPath)
         ) {
           continue;
         }
