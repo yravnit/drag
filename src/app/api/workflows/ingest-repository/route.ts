@@ -2,10 +2,7 @@ import { start } from "workflow/api";
 import { ingestRepository } from "@/workflows/ingest";
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth/server";
-import {
-  GitHubApiClient,
-  type GitHubTreeResponse,
-} from "@/lib/ingestion/githubApiClient";
+import { GitHubApiClient, type GitHubTreeResponse } from "@/lib/ingestion/githubApiClient";
 import { checkRateLimit } from "@/lib/rateLimit/rateLimiter";
 import { getUserAccessMode } from "@/lib/auth/accessMode";
 import {
@@ -17,7 +14,6 @@ import {
 import { getDefaultEmbeddingMetadataForVisibility } from "@/lib/embeddings/router";
 import { repositories, userRepositories } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
-
 
 import { db, type Database } from "@/db/db";
 
@@ -72,7 +68,9 @@ function validateIngestPayload(body: unknown): ValidatedPayload {
   }
 
   if ("authToken" in record && record.authToken !== undefined) {
-    throw new Error('Client-supplied "authToken" is forbidden. Authentication is derived from the server session.');
+    throw new Error(
+      'Client-supplied "authToken" is forbidden. Authentication is derived from the server session.',
+    );
   }
 
   const result: ValidatedPayload = {
@@ -265,7 +263,7 @@ export async function POST(request: Request) {
     let existing = null;
     if (githubId !== null) {
       const [record] = await db
-        .select({ id: repositories.id })
+        .select({ id: repositories.id, defaultBranch: repositories.defaultBranch })
         .from(repositories)
         .where(eq(repositories.githubId, githubId))
         .limit(1);
@@ -273,6 +271,21 @@ export async function POST(request: Request) {
     }
 
     if (existing) {
+      // repositories rows are shared across users and keyed by githubId, so the indexed branch
+      // belongs to every associated user. Reject a different branch instead of silently serving
+      // another branch's content or overwriting the branch other users depend on. Mirrors the
+      // guard in POST /api/repos; without it this route re-ingests the shared row on the
+      // requested branch while defaultBranch still reads the old one, so every other user of
+      // the row is served the wrong code and sync then ping-pongs between the two branches.
+      if (existing.defaultBranch && existing.defaultBranch !== targetBranch) {
+        return NextResponse.json(
+          {
+            error: `This repository is already indexed on branch '${existing.defaultBranch}'. Re-index it on '${targetBranch}' to switch branches.`,
+          },
+          { status: 409 },
+        );
+      }
+
       if (!entitlements.incrementalReindexAllowed) {
         return NextResponse.json(
           {

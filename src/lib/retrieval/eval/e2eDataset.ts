@@ -1,6 +1,6 @@
 import type { RetrievalBenchmarkCategory } from "./dataset";
 
-export type EvidenceType =
+type EvidenceType =
   | "full_evidence"
   | "partial_evidence"
   | "no_evidence"
@@ -132,10 +132,10 @@ export const E2E_RAG_EVAL_DATASET: E2EEvalCase[] = [
     query: "What is the fixed embedding vector dimension configured in DRAG?",
     category: "configuration",
     evidenceType: "full_evidence",
-    expectedFiles: ["src/lib/embeddings/config.ts", "src/db/schemas/chunks.ts"],
-    expectedConcepts: ["1024", "EMBEDDING_DIMENSIONS", "NVIDIA NIM"],
-    requiredFacts: ["1024"],
-    forbiddenClaims: ["1536", "768", "384", "4096"],
+    expectedFiles: ["src/db/schemas/chunks.ts"],
+    expectedConcepts: ["768", "EMBEDDING_DIMENSIONS", "vector"],
+    requiredFacts: ["768"],
+    forbiddenClaims: ["1536", "1024", "384", "4096"],
     description: "Evaluates exact vector embedding dimension constant",
   },
   {
@@ -244,15 +244,15 @@ export const E2E_RAG_EVAL_DATASET: E2EEvalCase[] = [
   },
   {
     id: "e2e-ambiguous-embedding-providers",
-    query: "What is the difference between NimEmbeddingProvider and MockEmbeddingProvider?",
+    query: "What is the difference between GeminiEmbeddingProvider and CloudflareEmbeddingProvider?",
     category: "exact_identifiers",
     evidenceType: "ambiguous_symbols",
-    expectedFiles: ["src/lib/embeddings/embeddingProvider.ts"],
-    expectedSymbols: ["NimEmbeddingProvider", "MockEmbeddingProvider"],
-    expectedConcepts: ["NimEmbeddingProvider calls NVIDIA NIM API", "MockEmbeddingProvider generates deterministic vectors for testing"],
-    requiredFacts: ["NimEmbeddingProvider", "MockEmbeddingProvider"],
-    forbiddenClaims: ["MockEmbeddingProvider calls OpenAI", "NimEmbeddingProvider runs locally in WebAssembly"],
-    description: "Evaluates disambiguating production and mock embedding providers",
+    expectedFiles: ["src/lib/embeddings/router.ts", "src/lib/embeddings/geminiEmbeddingProvider.ts"],
+    expectedSymbols: ["GeminiEmbeddingProvider", "CloudflareEmbeddingProvider"],
+    expectedConcepts: ["GeminiEmbeddingProvider is used for public repositories", "CloudflareEmbeddingProvider is used for private repositories", "router selects by repository visibility"],
+    requiredFacts: ["GeminiEmbeddingProvider", "CloudflareEmbeddingProvider"],
+    forbiddenClaims: ["public repositories use Cloudflare", "private repositories use Gemini"],
+    description: "Evaluates disambiguating the two privacy-selected embedding providers",
   },
   {
     id: "e2e-no-evidence-redis",

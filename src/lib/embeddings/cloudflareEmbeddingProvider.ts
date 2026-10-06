@@ -6,7 +6,7 @@ import {
 } from "./embeddingProvider";
 
 export const CLOUDFLARE_EMBEDDING_MODEL = "@cf/qwen/qwen3-embedding-0.6b";
-export const CLOUDFLARE_EMBEDDING_DIMENSIONS = 768;
+const CLOUDFLARE_EMBEDDING_DIMENSIONS = 768;
 const CLOUDFLARE_MAX_BATCH_SIZE = 50;
 
 function l2Normalize(vec: number[]): number[] {

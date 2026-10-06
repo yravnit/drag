@@ -30,8 +30,8 @@ export function getCalendarMonthWindow(now: Date = new Date()): {
   return { windowStart, windowEnd };
 }
 
-export const BOSS_AUTHORIZED_EMAILS = ["yrovnit47@gmail.com"] as const;
-export const BOSS_AUTHORIZED_USERNAMES = ["yravnit"] as const;
+const BOSS_AUTHORIZED_EMAILS = ["yrovnit47@gmail.com"] as const;
+const BOSS_AUTHORIZED_USERNAMES = ["yravnit"] as const;
 
 export function isBossAuthorized(email?: string | null, name?: string | null): boolean {
   if (email && BOSS_AUTHORIZED_EMAILS.some((e) => e.toLowerCase() === email.toLowerCase().trim())) {
@@ -172,8 +172,8 @@ export async function getUserEntitlements(
   return base;
 }
 
-export type TransactionClient = Parameters<Parameters<Database["transaction"]>[0]>[0];
-export type DbOrTx = Database | TransactionClient;
+type TransactionClient = Parameters<Parameters<Database["transaction"]>[0]>[0];
+type DbOrTx = Database | TransactionClient;
 
 /**
  * Checks whether the user can add another repository under their plan limit.

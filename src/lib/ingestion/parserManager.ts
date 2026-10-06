@@ -70,7 +70,13 @@ export class TreeSitterParserManager {
     const normLang = this.normalizeLanguage(language);
 
     if (this.languageCache.has(normLang)) {
-      return this.languageCache.get(normLang)!;
+      const cached = this.languageCache.get(normLang)!;
+      // Re-insert to mark as most recently used: Map preserves insertion order, so the
+      // eviction below takes keys().next(), which is only the *least* recently used
+      // entry if a hit refreshes its position. Without this the cache is FIFO.
+      this.languageCache.delete(normLang);
+      this.languageCache.set(normLang, cached);
+      return cached;
     }
 
     if (this.languageLoadPromises.has(normLang)) {
@@ -99,12 +105,13 @@ export class TreeSitterParserManager {
 
       const loadedLang = await Parser.Language.load(wasmPath);
 
-      // LRU eviction: if cache is full, evict the oldest entry (first insertion order key)
+      // LRU eviction: if cache is full, evict the least recently used entry. A hit on
+      // getLanguage re-inserts its key, so the first insertion-order key is the coldest one.
       if (this.languageCache.size >= MAX_CACHED_LANGUAGES) {
-        const oldestKey = this.languageCache.keys().next().value;
-        if (oldestKey !== undefined) {
-          const oldLang = this.languageCache.get(oldestKey);
-          this.languageCache.delete(oldestKey);
+        const coldestKey = this.languageCache.keys().next().value;
+        if (coldestKey !== undefined) {
+          const oldLang = this.languageCache.get(coldestKey);
+          this.languageCache.delete(coldestKey);
           try {
             const obj = oldLang as unknown as Record<string, unknown>;
             if (typeof obj?.delete === "function") obj.delete();

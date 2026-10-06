@@ -127,8 +127,10 @@ drag/
 │   │   ├── chat/
 │   │   │   └── conversation.ts # Message persistence, deduplication, injection defense
 │   │   ├── embeddings/
-│   │   │   ├── config.ts       # Embedding dimensions
-│   │   │   └── embeddingProvider.ts # EmbeddingProvider interface, NimEmbeddingProvider, MockEmbeddingProvider
+│   │   │   ├── embeddingProvider.ts # EmbeddingProvider interface and shared option types
+│   │   │   ├── geminiEmbeddingProvider.ts # Public repositories (gemini-embedding-2, 768d)
+│   │   │   ├── cloudflareEmbeddingProvider.ts # Private repositories (Workers AI, Matryoshka + L2)
+│   │   │   └── router.ts       # getEmbeddingProviderForRepository: visibility-based selection
 │   │   ├── leases/
 │   │   │   └── repositoryLeases.ts # Sync/embed lease claiming (FOR UPDATE SKIP LOCKED)
 │   │   ├── llm/
@@ -143,7 +145,7 @@ drag/
 │   │   ├── retrieval/
 │   │   │   ├── retriever.ts    # Cosine distance pgvector search + lexical full-text RRF
 │   │   │   └── eval/
-│   │   │       ├── dataset.ts         # 30-query curated evaluation dataset
+│   │       │       ├── dataset.ts         # 29-query curated evaluation dataset
 │   │   │       ├── evaluator.ts       # Hit@K and MRR computation engine
 │   │   │       ├── benchmarkCorpus.ts # Real chunk extraction from DRAG codebase
 │   │   │       └── runEval.ts         # Evaluation comparison runner
@@ -158,7 +160,6 @@ drag/
 │       ├── embed.ts            # Vercel Workflow: chunk + embed repository
 │       ├── ingest.ts           # Vercel Workflow: acquire + parse + chunk
 │       └── sync.ts             # Vercel Workflow: batch HEAD-SHA sync check
-├── UI_CAPABILITIES.md          # Technical documentation and guide for the UI agent
 └── HANDOFF.md                  # This file (single source of truth)
 ```
 
@@ -183,16 +184,27 @@ Added plan and enterprise entitlement columns:
 ### `repositories`
 - `github_id`: bigint().unique(). Unique conflict target for repository upserts and transfer/rename tracking.
 - `is_private`: boolean(). Server-verified GitHub visibility flag.
-- `embedding_provider`: text ("gemini" | "cloudflare" | "nvidia").
+- `embedding_provider`: text. Only `"gemini"` and `"cloudflare"` are ever written; the union is fixed in `router.ts:54`. `NimEmbeddingProvider` exists in `embeddingProvider.ts` but is not on the production path.
 - `embedding_model`: text.
 - `embedding_dimensions`: integer.
 - `next_sync_at`, `sync_status`, `sync_lease_expires_at`: sync status and lease tracking.
 - `embedding_status`, `embedding_lease_expires_at`: embedding status and lease tracking.
+- `default_branch`: text. The indexed branch, shared by every associated user because rows are keyed by `github_id`.
+- `head_commit_sha`: text. Written only by the ingestion pipeline, never by the add-repository routes.
+- `indexed_at`: timestamp with timezone. Drives the relative timestamps in the UI.
 
 ### `chunks`
 - `embedding`: custom vector(768) type for pgvector similarity search.
-- `embedding_provider`: text ("gemini" | "cloudflare" | "nvidia").
+- `embedding_provider`: text. Same `"gemini" | "cloudflare"` union as `repositories`; the retriever filters on it so vectors from different spaces are never mixed.
 - `embedding_model`: text.
+
+### `repository_files`
+Per-file hash tracking, one row per indexed file. Backs incremental reindexing and the storage total in the UI.
+- `id`, `repository_id` (FK, cascade delete), `file_path`, `content_hash`, `size_bytes`.
+- `indexed_at`: timestamp with timezone. Incremental ingest skips a file only when this is set and embedding status is ready.
+- `created_at`, `updated_at`: timestamps with timezone.
+- Unique on `(repository_id, file_path)` via `repo_files_repo_id_file_path_idx`.
+- `size_bytes` is summed for the "Repository Storage Display" figure served by `/api/repos/[id]/status`.
 
 ### `user_repositories`
 Join table representing user repository permissions. Unique on `(user_id, repository_id)`.
@@ -204,7 +216,7 @@ Caches GitHub repository read checks. Stale after 1 hour (TTL: 3600000 ms). Uniq
 Tethers user thread contexts to repositories and user IDs.
 
 ### `messages`
-Presents context threads. Status values: `pending | streaming | completed | failed`. Citations stored as JSONB metadata.
+Presents context threads. `status` is constrained by `messages_status_check` to `pending | streaming | completed | failed` (migration `20261006161125_messages_status_check`, applied to Neon), and the column is `$type<MessageStatus>()` so a bad literal is also a compile error. Citations stored as JSONB metadata.
 
 ### `rate_limits`
 Persistent Postgres rate limits to prevent serverless cold starts breaking checks. Operations run inside an atomic transaction using `SELECT ... FOR UPDATE` and upserts. Also tracks calendar month RAG query quotas with action `rag-monthly-quota`.
@@ -225,12 +237,12 @@ Stores validated NVIDIA chat model availability from weekly cron probe runs:
 
 1. **Workflow route protection**: `/api/workflows/embed`, `/api/workflows/sync`, and `/api/workflows/ingest-repository` require either valid user session authorization or internal cron authorization. Client-supplied GitHub auth tokens were removed from the request schema; tokens are retrieved strictly on the server using `auth.api.getAccessToken`.
 2. **Sync lease atomicity**: `claimSyncBatch` runs the lock query (`SELECT ... FOR UPDATE SKIP LOCKED`) and the update query within an explicit database transaction.
-3. **Ingestion fault-tolerance**: Parser failures and unreadable files log warnings and skip the individual file rather than aborting the workflow run.
+3. **Ingestion fault-tolerance**: Parser failures and unreadable files log warnings and skip the individual file rather than aborting the workflow run. Unreadable *directories* are handled the same way: `traverse` in `fileFilter.ts` catches `readdir` failures and skips that subtree, because `discoverRepositoryFiles` has no per-directory recovery and a single throw there would abort the whole run.
 4. **Ignored-diff HEAD advancement**: When a new commit contains only changes to ignored or non-indexed files, `headCommitSha` is advanced in the database before returning `skipped: true`.
 5. **Repository re-index and retry**: `POST /api/repos` checks existing status. It starts ingestion for new repositories, prevents duplicate workflows for `ready` repositories, and allows retrying `failed` or stale lease repositories. `headCommitSha` is never written by the route, so a retry is never skipped by the workflow's unchanged-SHA check.
 6. **Chat history deduplication and safety**: Prior conversation history is queried before inserting the current user message, preventing duplicates in the prompt. Prompts instruct the model that retrieved repository content is untrusted data. Retrieval or LLM failures mark the assistant message as `failed`.
 7. **Mermaid rendering hardening**: Mermaid uses `securityLevel: "strict"` and `htmlLabels: false`, so labels are native SVG `<text>`. This is mandatory, not cosmetic: Mermaid's default labels are `<foreignObject>` HTML, DOMPurify drops `foreignObject` entirely, and every diagram rendered as unlabeled boxes. `sanitizeMermaidSvg` therefore keeps the SVG-only profile, and the two settings are coupled — flipping either alone breaks label rendering. Rendered SVGs are sanitized with DOMPurify using the SVG profile, stripping `<script>`, inline event handlers, and `javascript:` URLs. Chart text is normalized by `normalizeMermaid` before rendering, which quotes unquoted edge labels, drops the stray `|>` the model appends to a closing label pipe, and removes the model's `style`/`classDef`/`linkStyle` lines. Each diagram carries zoom (50–200%, reset) and a Code↔Diagram toggle plus a copy button, and a chart that fails to compile falls back to the source view with the parser message shown.
-8. **One diagram look**: A single `THEME` in `MermaidBlock.tsx` sets `theme: "base"` with zinc surfaces (`#18181b` nodes, `#3f3f46` borders, `#71717a` edges, `#e4e4e7` text, `#0a0a0a` background) and one arrow style (`curve: "basis"`). Model-authored colors never survive normalization, so no diagram can reintroduce `#f9f`-style primaries. Do not reintroduce inline `style=` overrides in the block — they would fight the theme.
+8. **One diagram look**: A `THEME` in `MermaidBlock.tsx` sets `theme: "base"` with zinc surfaces (`#18181b` nodes, `#3f3f46` borders, `#71717a` edges, `#e4e4e7` text, `#0a0a0a` background); the arrow style `curve: "basis"` lives in a separate `flowchart` object, so it applies to flowchart diagrams only. Model-authored colors never survive normalization: `normalizeMermaid` strips line-anchored `style` / `classDef` / `linkStyle`, **plus `%%{init: {...}}%%` directives and leading YAML frontmatter**. The latter two matter because Mermaid merges directive and frontmatter config *over* the config from `initialize()`, and its sanitizer keeps any key that is valid config — so `theme`, `themeVariables`, and `htmlLabels` all survive, and `themeVariables` values are not colour-checked. Without stripping them, model output reinstates the `#f9f` primaries and the `htmlLabels` default that blank every label. Do not reintroduce inline `style=` overrides in the block — they would fight the theme.
 9. **Diagram sizing**: Mermaid emits `width="100%"` with an inline `max-width`, which shrinks wide charts into illegible thumbnails. `MermaidBlock` reads that `max-width` as the chart's natural width and applies it as a `min-width` floor, so wide diagrams scroll horizontally instead of collapsing. Zoom is CSS `zoom` on the wrapper (layout-aware, unlike `transform: scale`). A `width: auto` CSS override does **not** work here: it kills the sizing attribute and collapses the SVG to 0×0.
 10. **Sensitive file and secret exclusion**: Ingestion excludes files matching `.env*`, `.pem`, `.key`, `.p12`, `.pfx`, `.crt`, `.cer`, `.der`, `.kdbx`, SSH keys, and credential JSON files. File contents matching private key headers (`-----BEGIN ... PRIVATE KEY-----` or `-----BEGIN CERTIFICATE-----`) are skipped with a warning.
 11. **Multi-tenant isolation**: User conversations, repositories, and chunk retrieval strictly scope to authorized IDs. Forged IDs return 404 or 403.
@@ -239,7 +251,7 @@ Stores validated NVIDIA chat model availability from weekly cron probe runs:
 14. **No PII in the client bundle**: the BOSS plan banner in `PlanUsageModal.tsx` describes the tier without naming the administrator's email. Tier enforcement stays server-side in `entitlements.ts`.
 15. **No secrets in URLs**: the Gemini API key is sent as an `x-goog-api-key` header so proxies, request logs, and fetch error traces cannot record it.
 16. **Fail-closed entitlements and quota**: `checkRepositoryLimit` and `checkAndConsumeMonthlyQueryQuota` let database errors propagate so the route returns 5xx. No catch-all converts a failed count into "allowed".
-17. **Workflow ingest route enforces the same policy as the UI route**: `POST /api/workflows/ingest-repository` resolves the plan branch (even when `revision` is omitted) and assigns it to the workflow payload, checks tree truncation, file count, and repository size via `assertPlanRepositoryEntitlements`, and creates the `repositories` row plus `user_repositories` association inside the limit-check transaction.
+17. **Workflow ingest route enforces the same policy as the UI route**: `POST /api/workflows/ingest-repository` resolves the plan branch (even when `revision` is omitted) and assigns it to the workflow payload, checks tree truncation, file count, and repository size via `assertPlanRepositoryEntitlements`, and creates the `repositories` row plus `user_repositories` association inside the limit-check transaction. It also enforces the shared-repository branch guard: `repositories` rows are keyed by `github_id` and shared across users, so a request for a branch other than the existing `default_branch` is rejected with **409** rather than re-indexing the shared row and serving another branch's code to every other associated user. Covered by `ingest-repository/__tests__/route.test.ts`.
 
 ---
 
@@ -247,11 +259,11 @@ Stores validated NVIDIA chat model availability from weekly cron probe runs:
 
 | Component | Status | Description |
 |---|---|---|
-| Ingestion and Embed Workflows | **DONE** | Full and incremental chunking, NIM embeddings, transaction batching. |
+| Ingestion and Embed Workflows | **DONE** | Full and incremental chunking, privacy-selected embeddings (Gemini for public, Cloudflare for private), transaction batching. |
 | Ingestion Fault-Tolerance | **DONE** | Missing or failed parse skips file and continues instead of aborting. |
 | Durable Cron Sync | **DONE** | Atomic `claimSyncBatch` with `FOR UPDATE SKIP LOCKED` inside transactions. |
 | DB Rate Limiter | **DONE** | Atomic Postgres transaction rate limiter protecting chat, repos, and workflows. |
-| Bounded Parser Cache | **DONE** | Capped at 16 languages with LRU eviction. |
+| Bounded Parser Cache | **DONE** | Capped at `MAX_CACHED_LANGUAGES = 16` with true LRU eviction: a cache hit re-inserts its key so the first insertion-order key is the coldest. Only 13 source languages exist, so the cap is not reached in practice. |
 | Retrieval Module | **DONE** | Cosine similarity pgvector top-K retriever strictly scoped by repository ID. |
 | Streaming Chat API | **DONE** | `/api/chat` streams response, updates message status, prevents duplication, and persists citations. |
 | Inline Access Verification | **DONE** | Access cache verification with 1-hour TTL and explicit invalidation. |
@@ -268,10 +280,10 @@ Stores validated NVIDIA chat model availability from weekly cron probe runs:
 | Secret and Sensitive Filtering | **DONE** | Rejects sensitive file extensions, credential names, and private key headers. |
 | Canonical Lease Management | **DONE** | Consolidated lease queries in repositoryLeases.ts used by workflows and cron. |
 | Shared Chunk Persistence | **DONE** | Shared batching and persistence helper in dbLayer.ts for full and incremental ingestion. |
-| Swappable Embedding Provider | **DONE** | EmbeddingProvider interface with NimEmbeddingProvider and MockEmbeddingProvider. |
-| Retrieval Evaluation Suite | **DONE** | 30-query curated benchmark with Hit@1, Hit@3, Hit@5, MRR, categorized reporting, and regression thresholds (`npm run eval:retrieval`). |
+| Swappable Embedding Provider | **DONE** | `EmbeddingProvider` interface in `embeddingProvider.ts` with two implementations, `GeminiEmbeddingProvider` and `CloudflareEmbeddingProvider`, chosen per repository by `getEmbeddingProviderForRepository`. The dead `NimEmbeddingProvider` and `MockEmbeddingProvider` were deleted on 2026-10-06; `openai` stays as a dependency because `llmProvider.ts` uses it. |
+| Retrieval Evaluation Suite | **DONE** | 29-query curated benchmark with Hit@1, Hit@3, Hit@5, MRR, categorized reporting, and enforced regression thresholds (`npm run eval:retrieval`, also run in CI). Current MRR 0.6736. |
 | Hybrid Code Retrieval | **DONE** | Vector similarity + PostgreSQL lexical search fused via Reciprocal Rank Fusion (RRF). |
-| Bounded Context Assembly | **DONE** | Deduplicates chunks by ID and overlapping line ranges with bounded token assembly in `contextAssembler.ts`. |
+| Bounded Context Assembly | **DONE** | Deduplicates chunks by ID and overlapping line ranges with a bounded character budget in `contextAssembler.ts`. The bound is `DEFAULT_MAX_TOTAL_CHARS = 24000` measured on raw string length, not tokens (no tokenizer is involved), so it is roughly 6-8k tokens of code. |
 | Prompt & Citation Quality | **DONE** | Refined system prompt in `conversation.ts` distinguishing verified code facts from inferences, enforcing citation precision without spam, and expanding retrieval topK to 8 for multi-file coverage. |
 | End-to-End RAG Evaluation | **DONE** | 37-case benchmark evaluating retrieval separately from answer generation (`npm run eval:e2e`). Evaluates groundedness, factual correctness, citation correctness, insufficient-evidence handling, and multi-file reasoning. |
 | Chat Failure & Stream Recovery | **DONE** | Explicit failure states, retry handler without user prompt duplication, partial text preservation, and file-level indexing transparency. |
@@ -280,12 +292,12 @@ Stores validated NVIDIA chat model availability from weekly cron probe runs:
 | Chat Interaction Quality | **DONE** | Smart auto-scroll in `MessageList.tsx` avoiding scroll jumps while reading, and seamless status synchronization across repository switching. |
 | Conversation Management | **DONE** | Authenticated rename and delete operations via `PATCH` and `DELETE /api/conversations/[id]`, inline UI controls, and cascading message deletion. |
 | Workspace Keyboard Shortcuts | **DONE** | Global `Ctrl/Cmd + K` focusing repository filter, `Esc` closing overlays, `Enter` sending chat prompts, and `Shift + Enter` inserting newlines. |
-| Security Regression Audit | **DONE** | Automated test suite (`regressionAudit.test.ts`) verifying workflow auth, repo auth, conversation auth, rate limits, message size caps, GitHub token isolation, tenant boundaries, and Mermaid SVG sanitization. |
+| Security Regression Audit | **DONE** | Automated test suite (`regressionAudit.test.ts`) verifying message size caps, rate limits, GitHub token isolation, conversation authorization and tenant isolation, retriever repository-boundary scoping, cron auth, and Mermaid SVG sanitization. Workflow-route auth and repository-route auth are covered separately in `api/workflows/ingest-repository/__tests__/route.test.ts` and `api/repos/__tests__/route.test.ts`. |
 | Deployment & Secret Hardening | **DONE** | Zero-secret client bundle (`clientEnv.ts`), comprehensive `.env.example`, `CRON_SECRET` validation, and deployment env verification test (`deploymentEnv.test.ts`). |
 | Database Lifecycle Safety | **DONE** | Automated lifecycle test suite (`lifecycleSafety.test.ts`) verifying foreign key cascade deletes, user association cleanup cascading user conversations and messages, and unique index constraints. |
 | Failure Recovery & Bounded Delays | **DONE** | GitHub API client bounds `Retry-After` delays to `maxDelayMs` (10s) to prevent unbounded serverless execution hangs, with verified automated backoff and retry. |
 | Chat Retry Idempotency | **DONE** | `/api/chat` and UI support `isRetry` and `retryMessageId`, eliminating duplicate user messages in history, deleting failed assistant entries, and preventing prompt duplication in LLM payloads. |
-| Load & Concurrency Benchmark | **DONE** | Controlled benchmark script (`runLoadTest.ts` via `npm run eval:load`) measuring hybrid retrieval P50/P95 latencies under 1, 5, 10, and 20 concurrency levels, parser throughput (~3,000 chunks/s), and memory stability. |
+| Load & Concurrency Benchmark | **DONE** | Controlled benchmark script (`runLoadTest.ts` via `npm run eval:load`) measuring R50/P95 latency under 1, 5, 10, and 20 concurrency levels, parser throughput, and memory stability. **The retrieval half is an in-memory RRF pass over a synthetic corpus (`benchmarkCorpus.ts`), not pgvector/Postgres** — those latencies measure ranking cost only and must not be read as database capacity numbers. Throughput is computed at runtime, not a fixed target. |
 | Observability Secret Scrubber | **DONE** | Structured server logger (`logger.ts`) features an automated recursive secret scrubber redacting tokens, keys, passwords, and private key headers from log payloads. |
 | Held-Out RAG Evaluation | **DONE** | 5-case un-tuned held-out test suite integrated into `npm run eval:e2e` verifying zero prompt overfitting, grounded answer generation, and accurate refusal on negative cases. |
 | Production Launch Documentation | **DONE** | Launch-ready `README.md` documenting architecture, local setup, deployment steps, environment variables, test commands, and explicit operational limitations. |
@@ -332,10 +344,10 @@ DRAG implements tiered account plans. All limits are enforced server-side before
 |---|---|---|---|---|---|---|---|
 | **Free** | ₹0 | 2 | 25 / calendar month | 50 MB | 2,500 | `main` only | Disabled |
 | **Hobby** | ₹499/month | 10 | Configurable (`HOBBY_MONTHLY_QUERY_LIMIT`, default 250) | 250 MB | 12,500 | Any (`*`) | Enabled |
-| **Enterprise** | ₹15,000*/month | Configurable per user | Configurable per user | Configurable | Configurable | Configured entitlement (`main` safe default) | Configurable |
+| **Enterprise** | ₹15,000*/month | 50 (configurable) | Unmetered (`null`, configurable) | 1 GB (configurable) | 50,000 (configurable) | `main` safe default (configurable) | Enabled (configurable) |
 | **BOSS** | ₹0 (Exclusive) | Unlimited | Unmetered (null) | Unlimited | Unlimited | Any (`*`) | Enabled |
 
-Enterprise plans support custom negotiated limits stored on the user row without hardcoding static enterprise constraints. The BOSS plan is strictly reserved and enforced server-side for user email `yrovnit47@gmail.com` and GitHub username `yravnit`. Unauthorized attempts to spoof or set the BOSS plan in the database fall back to the Free plan.
+Enterprise plans support custom negotiated limits stored on the user row. The values above are `ENTERPRISE_DEFAULT_LIMITS` in `planConfig.ts:76-84` and apply to any enterprise user whose `custom_*` columns are null, so they are real enforced numbers rather than placeholders. The BOSS plan is strictly reserved and enforced server-side for user email `yrovnit47@gmail.com` and GitHub username `yravnit`. Unauthorized attempts to spoof or set the BOSS plan in the database fall back to the Free plan.
 
 ### Monthly query quota
 
@@ -421,16 +433,19 @@ DRAG monitors NVIDIA LLM availability automatically without manual model lists.
 
 ## 9. Tooling: tests, lint, and build
 
-- **Tests**. 58 vitest files, 527 tests passing under `src/**/__tests__/`. Run with `npm test`.
-- **Retrieval Eval**. `npm run eval:retrieval` runs baseline vs. hybrid evaluation benchmark with regression thresholds (Hit@1: 66.7%, Hit@5: 83.3%, MRR: 0.7150).
+- **Tests**. 57 vitest files, 525 tests passing under `src/**/__tests__/`. Run with `npm test`.
+- **Retrieval Eval**. `npm run eval:retrieval` runs the baseline vs. hybrid benchmark **with regression thresholds enforced** (the script passes `--check-thresholds`, so the command exits non-zero on a regression). Current: Hit@1 55.2%, Hit@3 69.0%, Hit@5 75.9%, MRR 0.6736 against `DEFAULT_RETRIEVAL_THRESHOLDS` of Hit@1 0.55 / Hit@3 0.65 / Hit@5 0.75 / MRR 0.60. Fully offline, so it also runs in CI. The query count and figures moved on 2026-10-06 when the dead NIM and mock embedding providers were deleted and their benchmark queries replaced with the Gemini and Cloudflare providers.
 - **End-to-End RAG Eval**. `npm run eval:e2e` runs full answer-quality evaluation across 37 curated cases and 5 un-tuned held-out cases.
 - **Load Benchmark**. `npm run eval:load` benchmarks concurrent retrieval latencies, parser throughput, and memory deltas.
 - **Lint**. `npm run lint` (eslint) and `npm run lint:ox` (oxlint) both exit with code 0.
 - **Type check**. `npx tsc --noEmit` exits with code 0.
 - **Build**. `npm run build` succeeds using Next.js 16 and Turbopack.
-- **CI**. `.github/workflows/ci.yml` runs `npm ci`, lint, lint:ox, `tsc --noEmit`, `npm test`, and `next build` on every push and PR.
+- **CI**. `.github/workflows/ci.yml` runs `npm ci`, lint, lint:ox, `tsc --noEmit`, `npm test`, `eval:retrieval`, and `next build` on every push and PR.
+- **Format**. `npm run format:ox` is *not* enforced in CI and currently reports issues across the tree; treat it as advisory and format only the files you touch.
+- **`npm ci` is broken on the committed lockfile.** It aborts with `Missing: @nestjs/common@12.1.2 from lock file` (and ~150 similar entries) on a pristine checkout — the lockfile is internally inconsistent and was already so before 2026-10-06. CI calls `npm ci`, so CI is red for this reason, not because of source changes. Regenerating the lockfile also re-resolves `better-auth` from `^1.6.23` to 1.7.x, which breaks `auth.api.getAccessToken({ providerId })` in five route files with `TS2339`/`TS2769`. Fix by pinning `better-auth` to an exact `1.6.24` and regenerating the lock with `npm install --package-lock-only --legacy-peer-deps` (the plain `npm install` fails `ERESOLVE` on `better-auth`'s optional `drizzle-kit` peer).
+- **Ad-hoc dependency auditing.** Knip, dependency-cruiser, and vitest coverage were run once as throwaway `--no-save` installs to find dead code; none are project dependencies and none are wired into scripts or CI. See section 10 for the findings and what was removed.
 
-*Last updated: 2026-10-03, citation marker click fix across list items/tables/headings, per-message Sources chips, Manrope + Nohemi + Fira Code type system, fastest-model default in the picker (527 tests green)*
+*Last updated: 2026-10-06, verified every section against the code: fixed the shared-repository branch guard on `/api/workflows/ingest-repository` (409), stripped Mermaid `%%{init}` and frontmatter theme overrides, made the parser cache genuinely LRU, enforced `eval:retrieval` regression thresholds in CI, rewrote the GitHub token-isolation test so it can actually fail, made unreadable directories skip instead of aborting ingestion, and corrected the drifted claims in sections 3-7, 9, and 10 (525 tests green, dead-code sweep applied)*
 
 ---
 
@@ -455,7 +470,7 @@ reviewer's; the outcome column is ours.
 | 12 | minor | `nvidiaModelService.ts` discovery fetch had no timeout | **FIXED** — `AbortSignal.timeout(10_000)` |
 | 13 | major | `repos/route.ts` pre-check blocked retries | **FIXED** — pre-check deleted; the transactional check after the GitHub lookups exempts existing associations |
 | 14 | critical | `ingest.ts` incremental check blocked first-time Free ingestion | **FIXED** — gated on a non-empty tracked-files map |
-| 15 | major | `repos/route.ts` shared-row branch overwrite / silent reuse | **FIXED** — 409 on branch mismatch |
+| 15 | major | `repos/route.ts` shared-row branch overwrite / silent reuse | **FIXED** — 409 on branch mismatch. The same guard was ported to `ingest-repository/route.ts` on 2026-10-06, which had been missing it (see section 5 claim 17) |
 | 16 | major | `ingest-repository/route.ts` skipped branch/file/size policy and never associated the user | **FIXED** — resolved branch assigned to the payload, `assertPlanRepositoryEntitlements` applied, association created in the limit-check transaction |
 | 17 | major | `entitlements.ts` quota enforcement failed open | **FIXED** — catch-alls and the non-transactional fallback removed |
 | 18 | critical | `repos/route.ts` wrote `headCommitSha` before ingestion | **FIXED** — route persists only `defaultBranch`; the pipeline records the SHA |
@@ -464,6 +479,59 @@ reviewer's; the outcome column is ours.
 | 21 | major | `entitlements.ts` rollback lost concurrent updates | **FIXED** — single `GREATEST(count - 1, 0)` statement |
 | 22 | minor | `planConfig.ts` Hobby unmetered when env unset | **FIXED** — `HOBBY_MONTHLY_QUERY_LIMIT` defaults to 250 |
 | 23 | major | `entitlements.ts` repository-limit lock released before the insert | **FIXED** — check and association insert share one transaction in both add routes |
+
+### Follow-up findings from the 2026-10-06 verification pass
+
+Found by auditing this document against the code rather than by review. All are fixed on `frontend`.
+
+| # | Severity | Location | Outcome |
+|---|---|---|---|
+| 24 | critical | `ingest-repository/route.ts` had no shared-repository branch guard, unlike `repos/route.ts` | **FIXED** — a paying user could re-ingest a shared row on another branch and serve every other user the wrong code; now 409 |
+| 25 | major | `normalizeMermaid.ts` stripped only line styling, not `%%{init}` or frontmatter | **FIXED** — both stripped; model output could otherwise override the theme and `htmlLabels` |
+| 26 | major | `regressionAudit.test.ts` GitHub token-isolation assertion used a two-arg matcher against a one-arg call | **FIXED** — the assertion could never fail, and the fetcher was never invoked because `answerConversation` is mocked; the test now exercises the fetcher directly |
+| 27 | minor | `runEval.ts` threshold gate unreachable from `npm run eval:retrieval` | **FIXED** — script passes `--check-thresholds` and CI runs it |
+| 28 | minor | `parserManager.ts` eviction was FIFO despite the LRU comment | **FIXED** — a cache hit re-inserts its key |
+| 29 | minor | `fileFilter.ts` `readdir` unguarded, so one unreadable directory aborted the whole ingestion run | **FIXED** — caught and skipped with a warning |
+| 30 | minor | `messages.status` accepted any string; the four lifecycle values were convention only | **FIXED** — `messages_status_check` CHECK constraint plus `$type<MessageStatus>()`; migration `20261006161125_messages_status_check` is **applied to Neon** (ledger verified, all 18 existing rows were valid before the constraint was added) |
+| 31 | cleanup | `NimEmbeddingProvider` and `MockEmbeddingProvider` were dead code, along with `config.ts`, `EMBEDDING_MODEL`, `EMBEDDING_BASE_URL`, and the NVIDIA embedding endpoint guard | **REMOVED** — `embeddingProvider.ts` now holds only the interface; `openai` stays for `llmProvider.ts`. Benchmark queries were repointed at the Gemini and Cloudflare providers |
+
+---
+
+## 11. Dead-code sweep (2026-10-06)
+
+Found with one-off `--no-save` installs of **knip** 6.40.0, **dependency-cruiser** 18.5.0, and `vitest run --coverage`. Neither tool was added to `package.json`, `package-lock.json`, or any npm script; both were uninstalled afterwards. `vitest` and `@vitest/coverage-v8` were already project devDependencies.
+
+### Removed
+
+| Kind | Finding | Outcome |
+|---|---|---|
+| unused file | `src/lib/embeddings/index.ts` — a one-line `export * from "./embeddingProvider"` barrel with no importers | **DELETED** |
+| circular dep | `embeddingProvider.ts:31-33` re-exported its own three siblings, so `router → provider → router` cycled. Left behind when the `index.ts` barrel was inlined | **REMOVED** — `embeddingProvider.ts` is now types-only. dependency-cruiser reports **0 cycles** |
+| unused dep | `@types/tar` — `tar@7.5.21` ships its own `dist/commonjs/index.d.ts`, so the DefinitelyTyped stub was dead weight | **REMOVED** |
+| unused devDep | `@types/dompurify` — `dompurify@3.2.4` ships its own `dist/purify.cjs.d.ts` | **REMOVED** |
+| unlisted dep | `ignore` was imported by `fileFilter.ts` but only present as a transitive dev dependency of eslint, so production ingestion depended on hoisting by luck | **PROMOTED** to a direct `dependencies` entry at the already-resolved `^5.3.2` (no lockfile churn) |
+| unused export | `authClient`, `signUp` (`auth/client.ts`) — only `signIn`/`signOut`/`useSession` are consumed | **DE-EXPORTED** |
+| unused export | `SENSITIVE_EXTENSIONS`, `isProjectFile`, `SupportedSourceLanguage`, `ProjectDocumentLanguage` (`ingestion/fileFilter.ts`) | **DE-EXPORTED** (kept module-private; `SENSITIVE_EXTENSIONS` still used by `isSensitiveFile`) |
+| unused export | `retrieveChunksLexical`, `retrieveChunksHybrid`, `HybridRetrievalOptions` (`retrieval/retriever.ts`) | **REMOVED/DE-EXPORTED** — the lexical and hybrid helpers are internal to the file; `HybridRetrievalOptions` was never referenced at all |
+| unused export | `claimEmbeddingLease`/`finalizeEmbedding`/`clearEmbeddingLease` re-exported from `workflows/embed.ts`; `claimSyncBatch`/`settleSyncLease` from `workflows/sync.ts` | **REMOVED** — pure pass-through re-exports, imported directly from `lib/leases/repositoryLeases` everywhere |
+| unused export | 16 module-private constants/interfaces: `GEMINI_EMBEDDING_DIMENSIONS`, `GEMINI_MAX_BATCH_SIZE`, `CLOUDFLARE_EMBEDDING_DIMENSIONS`, `NVIDIA_MODELS_API_URL`, `NVIDIA_CHAT_COMPLETIONS_URL`, `LEASE_DURATION_MS`, `BOSS_AUTHORIZED_EMAILS`, `BOSS_AUTHORIZED_USERNAMES`, `TransactionClient`, `DbOrTx`, `RepositoryEmbeddingContext`, `GitHubCompareFile`, `GitHubTreeEntry`, `RepositoryProvider`, `LLMProvider`, `AssembledCitation`, `EvidenceType`, `E2ERetrievalMetrics`, `E2EAnswerMetrics`, `E2ECaseResult`, `QueryEvalResult`, `CategoryEvalMetrics` | **DE-EXPORTED** — all still used, just not from outside their module |
+
+### Known false positive
+
+- `tree-sitter-wasms` is reported unused by knip because it is never `import`ed. `parserManager.ts:92-98` builds the path `node_modules/tree-sitter-wasms/out/<grammar>.wasm` with `path.join` and loads it via `Parser.Language.load`, and `next.config.ts` lists it in `serverExternalPackages`. **Keep the dependency.**
+
+### Test fix
+
+`entitlements.test.ts > rolls back consumed query with a single atomic SQL decrement` was failing on `HEAD` before this sweep. The assertion extracted `sql\`GREATEST(...)\`` by joining `queryChunks` and keeping only chunks whose `.value` is an array, but drizzle-orm `1.0.0-rc` emits string chunks (`{value: "GREATEST("}`), so the joined SQL was always `""` and the test could never pass. **FIXED** — the extraction now joins string chunks too. The production code was already correct.
+
+### Coverage config note
+
+`vitest.config.ts` coverage is scoped to `src/lib/ingestion/**` and `src/workflows/**` only. Everything else — `app/api`, `lib/auth`, `lib/plans`, `lib/retrieval`, `lib/embeddings`, `lib/mermaid` — is excluded, so `npm run test:coverage` reports no coverage for it. Widen `include` if you want those numbers.
+
+### Not changed
+
+- `.well-known/workflow/v1/**/route.js` files are reported as orphans by dependency-cruiser. They are `workflow` SDK build output, gitignored, and registered as real routes in the Next.js build. **Not dead code.**
+- `npm ci` and the lockfile's internal consistency are pre-existing problems, documented in section 9. Left alone deliberately: regenerating the lock re-resolves `better-auth` and breaks five route files.
 
 
 

@@ -38,12 +38,6 @@ vi.mock("drizzle-orm", () => ({
   isNull: vi.fn((a) => ({ isNull: a })),
 }));
 
-vi.mock("@/lib/embeddings/embeddingProvider", () => ({
-  NimEmbeddingProvider: class {
-    generateEmbeddings = mockGenerateEmbeddings;
-  },
-}));
-
 vi.mock("@/lib/embeddings/router", () => ({
   getEmbeddingProviderForRepository: vi.fn(() => ({
     generateEmbeddings: mockGenerateEmbeddings,

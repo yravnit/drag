@@ -48,15 +48,16 @@ vi.mock("@/db/db", () => ({
   },
 }));
 
-vi.mock("@/lib/chat/conversation", () => ({
-  answerConversation: vi.fn().mockResolvedValue({
-    ok: true,
-    stream: new ReadableStream({
-      start(c) {
-        c.close();
-      },
-    }),
+const mockAnswerConversation = vi.fn().mockResolvedValue({
+  ok: true,
+  stream: new ReadableStream({
+    start(c) {
+      c.close();
+    },
   }),
+});
+vi.mock("@/lib/chat/conversation", () => ({
+  answerConversation: (...args: any[]) => mockAnswerConversation(...args),
   defaultConversationChatDeps: vi.fn().mockReturnValue({}),
 }));
 
@@ -143,10 +144,25 @@ describe("Phase 1 Security & Reliability Regression Audit", () => {
       const res = await chatPOST(req);
       expect(res.status).toBe(200);
 
-      // Verify that getAccessToken was provided as the token fetcher rather than body.githubToken
-      expect(mockGetAccessToken).not.toHaveBeenCalledWith(
-        expect.anything(),
-        expect.objectContaining({ headers: expect.anything() }),
+      // The token must come from the server session, never from the request body. This route
+      // only *builds* the fetcher and hands it to answerConversation (mocked here), so the
+      // fetcher is invoked directly: a matcher on getAccessToken alone would never fire,
+      // because nothing downstream of the route calls it in this setup.
+      const fetcher = mockAnswerConversation.mock.calls[0]?.[1]?.getGithubToken;
+      expect(typeof fetcher).toBe("function");
+
+      mockGetAccessToken.mockResolvedValueOnce({ accessToken: "gho_server_session_token" });
+      await expect(fetcher()).resolves.toBe("gho_server_session_token");
+
+      // Single options object keyed on the github provider, carrying server-side headers only.
+      expect(mockGetAccessToken).toHaveBeenCalledWith({
+        body: { providerId: "github" },
+        headers: expect.anything(),
+      });
+
+      // The client-injected canary must not appear anywhere in what reached the fetcher.
+      expect(JSON.stringify(mockAnswerConversation.mock.calls)).not.toContain(
+        "gho_malicious_attacker_token",
       );
     });
   });

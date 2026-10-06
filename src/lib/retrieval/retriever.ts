@@ -15,14 +15,6 @@ export interface RetrievedChunk {
   similarity: number;
 }
 
-export interface HybridRetrievalOptions {
-  topK?: number;
-  database?: Database;
-  k?: number; // RRF smoothing constant (default: 60)
-  lexicalCandidateLimit?: number;
-  vectorCandidateLimit?: number;
-}
-
 /**
  * Retrieves the top-K semantically similar chunks for a repository given a query embedding vector.
  * Pinned to pgvector `<=>` cosine distance operator (ordered ascending to find closest/most similar).
@@ -79,7 +71,7 @@ export async function retrieveChunksVector(
  * Retrieves candidate chunks via PostgreSQL lexical matching against symbol names,
  * file paths, and code text identifiers.
  */
-export async function retrieveChunksLexical(
+async function retrieveChunksLexical(
   repositoryId: string,
   queryText: string,
   topK = 15,
@@ -230,7 +222,7 @@ export function fuseHybridResults(
  * Combined hybrid retrieval: executes vector search and lexical search in parallel,
  * then merges and ranks them via Reciprocal Rank Fusion.
  */
-export async function retrieveChunksHybrid(
+async function retrieveChunksHybrid(
   repositoryId: string,
   queryText: string,
   queryEmbedding: number[],

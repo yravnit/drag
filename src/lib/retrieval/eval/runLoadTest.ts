@@ -42,6 +42,12 @@ function calculatePercentiles(latencies: number[]): {
 
 /**
  * 1. Benchmark concurrent hybrid retrieval operations
+ *
+ * ponytail: ranks an in-memory RRF pass over a synthetic corpus, so these latencies
+ * measure ranking cost only — not pgvector, network, or Postgres. Useful as a
+ * regression guard on the fusion math; useless as a database capacity number. Upgrade
+ * path: a variant that runs the same queries through the real retriever against Neon
+ * when DATABASE_URL is live, kept out of CI so the suite stays offline.
  */
 export async function benchmarkConcurrentRetrieval(
   concurrencyLevels: number[] = [1, 5, 10, 20],
@@ -194,7 +200,7 @@ export function formatLoadReport(
   lines.push(" DRAG Production Readiness: Concurrency & Load Benchmark");
   lines.push("============================================================");
   lines.push("");
-  lines.push("[1] HYBRID RETRIEVAL CONCURRENCY BENCHMARK (pgvector + Lexical RRF)");
+  lines.push("[1] HYBRID RETRIEVAL CONCURRENCY BENCHMARK (in-memory RRF, no database)");
   lines.push("------------------------------------------------------------");
   lines.push(
     " Concurrency | Requests | P50 (ms) | P95 (ms) | P99 (ms) | Avg (ms) | Throughput (req/s)",
@@ -227,8 +233,12 @@ export function formatLoadReport(
   lines.push("------------------------------------------------------------");
   lines.push(" Observed Bottleneck:   External LLM streaming latency (~1.5-3.5s per response)");
   lines.push(" Safe Concurrency:      20 concurrent retrieval operations per node (<15ms P95)");
-  lines.push(" Observed Failure Point: Tree-sitter file size >250MB or >5,000 files (rejected by API)");
-  lines.push(" Rate-Limit Protection: 30 chat req/min/user & 5 ingest req/hr/user persisted in Postgres");
+  lines.push(
+    " Observed Failure Point: Tree-sitter file size >250MB or >5,000 files (rejected by API)",
+  );
+  lines.push(
+    " Rate-Limit Protection: 30 chat req/min/user & 5 ingest req/hr/user persisted in Postgres",
+  );
   lines.push("============================================================");
 
   return lines.join("\n");

@@ -8,8 +8,15 @@ import {
   messages,
   repositoryAccessCache,
   rateLimits,
+  MESSAGE_STATUSES,
 } from "../schema";
-import { getTableConfig } from "drizzle-orm/pg-core";
+import { getTableConfig, PgDialect } from "drizzle-orm/pg-core";
+import type { SQL } from "drizzle-orm";
+
+/** Renders a CHECK constraint's SQL expression to a string via drizzle's own Postgres dialect. */
+function compileCheck(value: SQL): string {
+  return new PgDialect().sqlToQuery(value).sql;
+}
 
 describe("Production Database Safety & Lifecycle Audit (5B)", () => {
   describe("Foreign Key & Cascade Behavior", () => {
@@ -136,6 +143,22 @@ describe("Production Database Safety & Lifecycle Audit (5B)", () => {
     it("defines message status column supporting streaming and failure recovery", () => {
       expect(messages.status).toBeDefined();
       expect(messages.citations).toBeDefined();
+    });
+
+    it("constrains messages.status to the four known lifecycle values", () => {
+      const config = getTableConfig(messages);
+      const statusCheck = config.checks.find((c) => c.name === "messages_status_check");
+      expect(statusCheck).toBeDefined();
+
+      // Compiling to SQL is the real assertion: the generated statement must test membership
+      // of exactly these four values. Inspecting queryChunks instead would couple the test to
+      // drizzle's internal chunk shape.
+      const compiled = compileCheck(statusCheck!.value);
+      for (const value of MESSAGE_STATUSES) {
+        expect(compiled).toContain(`'${value}'`);
+      }
+      // Four literals, three "or" joins: a set test rather than a loose prefix match.
+      expect(compiled.match(/'pending'|'streaming'|'completed'|'failed'/g)).toHaveLength(4);
     });
   });
 });

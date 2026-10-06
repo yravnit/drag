@@ -34,7 +34,7 @@ export interface AcquireOptions {
   apiClient?: GitHubApiClient;
 }
 
-export interface RepositoryProvider {
+interface RepositoryProvider {
   acquire(
     owner: string,
     repo: string,

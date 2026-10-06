@@ -1,7 +1,7 @@
 import type { E2EEvalCase } from "./e2eDataset";
 import type { RetrievedChunk } from "../retriever";
 
-export interface E2ERetrievalMetrics {
+interface E2ERetrievalMetrics {
   totalQueries: number;
   hitAt1Count: number;
   hitAt3Count: number;
@@ -12,7 +12,7 @@ export interface E2ERetrievalMetrics {
   mrr: number;
 }
 
-export interface E2EAnswerMetrics {
+interface E2EAnswerMetrics {
   totalEvaluated: number;
   groundedCount: number;
   groundednessRate: number;
@@ -28,7 +28,7 @@ export interface E2EAnswerMetrics {
   multiFileReasoningRate: number;
 }
 
-export interface E2ECaseResult {
+interface E2ECaseResult {
   caseId: string;
   query: string;
   evidenceType: string;

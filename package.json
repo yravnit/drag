@@ -19,18 +19,18 @@
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "auth:generate-schema": "npx @better-auth/cli generate --config src/lib/auth/server.ts --output src/db/schemas/auth.ts --yes",
-    "eval:retrieval": "tsx src/lib/retrieval/eval/runEval.ts",
+    "eval:retrieval": "tsx src/lib/retrieval/eval/runEval.ts --check-thresholds",
     "eval:e2e": "tsx src/lib/retrieval/eval/runE2eEval.ts",
     "eval:load": "tsx src/lib/retrieval/eval/runLoadTest.ts"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",
     "@t3-oss/env-nextjs": "^0.13.11",
-    "@types/tar": "^6.1.13",
     "better-auth": "^1.6.23",
     "dompurify": "^3.2.4",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^1.0.0-rc.4",
+    "ignore": "^5.3.2",
     "lucide-react": "^1.30.0",
     "mermaid": "^11.16.1",
     "next": "16.2.10",
@@ -47,7 +47,6 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
-    "@types/dompurify": "^3.0.5",
     "@types/jsdom": "^30.0.0",
     "@types/node": "^20",
     "@types/react": "^19",

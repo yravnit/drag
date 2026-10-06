@@ -132,8 +132,6 @@ import {
   clearEmbeddingLease,
 } from "@/lib/leases/repositoryLeases";
 
-export { claimEmbeddingLease, finalizeEmbedding, clearEmbeddingLease };
-
 async function claimEmbeddingLeaseStep(repositoryId: string) {
   "use step";
   return claimEmbeddingLease(db, repositoryId);

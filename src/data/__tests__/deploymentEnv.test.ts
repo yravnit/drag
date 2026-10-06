@@ -25,10 +25,8 @@ describe("Deployment Environment & Secrets Audit (5A)", () => {
     expect(serverEnv.EMBEDDING_DIMENSIONS).toBe(768);
   });
 
-  it("configures valid hosted or custom AI endpoints", () => {
-    expect(serverEnv.EMBEDDING_BASE_URL).toMatch(/^https?:\/\//);
+  it("configures valid LLM endpoints", () => {
     expect(serverEnv.LLM_BASE_URL).toMatch(/^https?:\/\//);
-    expect(serverEnv.EMBEDDING_MODEL).toBe("nvidia/llama-nemotron-embed-1b-v2");
     expect(serverEnv.LLM_MODEL).toBe("minimaxai/minimax-m3");
   });
 });

@@ -1,0 +1,1 @@
+ALTER TABLE "messages" ADD CONSTRAINT "messages_status_check" CHECK ("status" in ('pending', 'streaming', 'completed', 'failed'));

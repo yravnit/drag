@@ -26,7 +26,7 @@ export interface GitHubCommitResponse {
   };
 }
 
-export interface GitHubCompareFile {
+interface GitHubCompareFile {
   filename: string;
   status: "added" | "modified" | "removed" | "renamed" | "copied" | "changed" | string;
   previous_filename?: string;
@@ -40,7 +40,7 @@ export interface GitHubCompareResponse {
   files?: GitHubCompareFile[];
 }
 
-export interface GitHubTreeEntry {
+interface GitHubTreeEntry {
   path: string;
   mode: string;
   type: "blob" | "tree" | "commit";

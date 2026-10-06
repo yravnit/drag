@@ -27,6 +27,20 @@ const STRAY_LABEL_ARROW = /(<?[-=.]{2,}[xo]?>?\s*\|[^|\n]*\|)>/g;
 const MODEL_STYLING = /^[ \t]*(?:style|classDef|linkStyle)\s+\S+.*$/gm;
 
 /**
+ * `%%{init: {"themeVariables": {"primaryColor": "#f9f"}}}%%` and a leading YAML
+ * `---` frontmatter block are the other two ways a chart overrides the house theme.
+ * Mermaid merges both *over* the config from `initialize()` (`addDirective` pushes
+ * onto a directive list that `updateCurrentConfig` applies last), and its directive
+ * sanitizer keeps any key that is valid config, so `theme`, `themeVariables`, and
+ * `htmlLabels` all survive. `themeVariables` values are not colour-checked either:
+ * only `nodeColors` has a pattern. Stripping the line-based styling above is
+ * therefore not enough — without these two, model output reinstates the `#f9f`
+ * primaries and the `htmlLabels` default that blank every label.
+ */
+const INIT_DIRECTIVE = /%%\{[\s\S]*?\}%%/g;
+const FRONT_MATTER = /^[^\S\n\r]*---[^\S\n\r]*\r?\n[\s\S]*?\r?\n[^\S\n\r]*---[^\S\n\r]*(?:\r?\n|$)/;
+
+/**
  * Repairs Mermaid charts the model wrote but Mermaid cannot parse, then strips the
  * model's hand-painted styling so every diagram renders with the house theme.
  *
@@ -44,5 +58,7 @@ export function normalizeMermaid(chart: string): string {
       label.length === 0 ? match : `${arrow}|"${label}"|`,
     )
     .replace(STRAY_LABEL_ARROW, "$1")
-    .replace(MODEL_STYLING, "");
+    .replace(MODEL_STYLING, "")
+    .replace(INIT_DIRECTIVE, "")
+    .replace(FRONT_MATTER, "");
 }

@@ -2,7 +2,7 @@ import fs from "fs";
 import path from "path";
 import ignore, { Ignore } from "ignore";
 
-export type SupportedSourceLanguage =
+type SupportedSourceLanguage =
   | "typescript"
   | "tsx"
   | "javascript"
@@ -17,7 +17,7 @@ export type SupportedSourceLanguage =
   | "c"
   | "php";
 
-export type ProjectDocumentLanguage =
+type ProjectDocumentLanguage =
   | "markdown"
   | "json"
   | "yaml"
@@ -150,7 +150,7 @@ const IGNORED_EXTENSIONS = new Set([
   ".kdbx",
 ]);
 
-export const SENSITIVE_EXTENSIONS = new Set([
+const SENSITIVE_EXTENSIONS = new Set([
   ".pem",
   ".key",
   ".p12",
@@ -302,7 +302,7 @@ export function getLanguageForFile(relativePath: string): DiscoveredFile["langua
 /**
  * Returns true for project/config files (non-source language tag).
  */
-export function isProjectFile(language: DiscoveredFile["language"]): boolean {
+function isProjectFile(language: DiscoveredFile["language"]): boolean {
   return !SOURCE_LANGUAGES.has(language);
 }
 
@@ -334,7 +334,20 @@ export async function discoverRepositoryFiles(
   }
 
   async function traverse(currentDir: string, relativeDir: string) {
-    const entries = await fs.promises.readdir(currentDir, { withFileTypes: true });
+    // An unreadable directory (permissions, broken symlink, race with a checkout) must skip
+    // that subtree rather than reject: discoverRepositoryFiles has no per-directory recovery,
+    // so one throw here aborts the entire ingestion run at the caller's await.
+    let entries: fs.Dirent[];
+    try {
+      entries = await fs.promises.readdir(currentDir, { withFileTypes: true });
+    } catch (err) {
+      console.warn(
+        `[fileFilter] Skipping unreadable directory '${relativeDir || "."}': ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return;
+    }
 
     // Deterministic sorting (alphabetical)
     entries.sort((a, b) => a.name.localeCompare(b.name));

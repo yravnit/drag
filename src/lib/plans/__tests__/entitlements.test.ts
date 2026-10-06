@@ -416,7 +416,7 @@ describe("Plan Entitlements Subsystem", () => {
       // Decrement happens inside SQL (GREATEST(count - 1, 0)), not via read-modify-write,
       // so a concurrent consumption can never be erased by the rollback.
       const literalSql = capturedSet.count.queryChunks
-        .flatMap((chunk: any) => (Array.isArray(chunk?.value) ? chunk.value : []))
+        .map((chunk: any) => (Array.isArray(chunk?.value) ? chunk.value.join("") : chunk?.value ?? ""))
         .join("");
       expect(literalSql).toContain("GREATEST");
     });

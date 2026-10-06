@@ -1,6 +1,6 @@
 import type { RetrievedChunk } from "./retriever";
 
-export interface AssembledCitation {
+interface AssembledCitation {
   index: number;
   filePath: string;
   startLine: number;

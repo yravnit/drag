@@ -11,7 +11,10 @@ let mermaid: Mermaid;
 beforeAll(async () => {
   const dom = new JSDOM("<!DOCTYPE html><body></body>", { pretendToBeVisual: true });
   Object.assign(globalThis, { window: dom.window, document: dom.window.document });
-  Object.defineProperty(globalThis, "navigator", { value: dom.window.navigator, configurable: true });
+  Object.defineProperty(globalThis, "navigator", {
+    value: dom.window.navigator,
+    configurable: true,
+  });
   mermaid = ((await import("mermaid")) as { default: Mermaid }).default;
   mermaid.initialize?.({ startOnLoad: false, securityLevel: "strict" });
 });
@@ -102,6 +105,37 @@ describe("normalizeMermaid", () => {
     expect(normalized).not.toContain("linkStyle");
     expect(normalized).toContain('A[Frontend] -->|"HTTP Requests"| B[Controller]');
     expect(normalized).toContain("class B hot");
+    expect(await parses(normalized)).toBe(true);
+  });
+
+  it("strips %%{init} theme overrides so the house theme cannot be replaced", async () => {
+    const chart = `%%{init: {"themeVariables": {"primaryColor": "#f9f"}, "htmlLabels": true}}%%
+flowchart TD
+  A[Frontend] --> B[Backend]`;
+
+    const normalized = normalizeMermaid(chart);
+
+    expect(normalized).not.toContain("%%{");
+    expect(normalized).not.toContain("#f9f");
+    expect(normalized).not.toContain("htmlLabels");
+    expect(await parses(normalized)).toBe(true);
+  });
+
+  it("strips leading YAML frontmatter config", async () => {
+    const chart = `---
+config:
+  theme: dark
+  themeVariables:
+    primaryColor: "#f9f"
+---
+flowchart TD
+  A[Frontend] --> B[Backend]`;
+
+    const normalized = normalizeMermaid(chart);
+
+    expect(normalized).not.toContain("themeVariables");
+    expect(normalized).not.toContain("#f9f");
+    expect(normalized).toContain("flowchart TD");
     expect(await parses(normalized)).toBe(true);
   });
 

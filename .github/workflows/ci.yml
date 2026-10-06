@@ -31,4 +31,5 @@ jobs:
       - run: npm run lint:ox
       - run: npx tsc --noEmit
       - run: npm test
+      - run: npm run eval:retrieval
       - run: npm run build

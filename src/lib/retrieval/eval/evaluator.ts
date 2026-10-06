@@ -1,7 +1,7 @@
 import type { RetrievalEvalQuery } from "./dataset";
 import type { RetrievedChunk } from "../retriever";
 
-export interface QueryEvalResult {
+interface QueryEvalResult {
   queryId: string;
   query: string;
   category: string;
@@ -19,7 +19,7 @@ export interface QueryEvalResult {
   firstHitRank: number | null;
 }
 
-export interface CategoryEvalMetrics {
+interface CategoryEvalMetrics {
   category: string;
   totalQueries: number;
   hitAt1Count: number;

@@ -9,7 +9,7 @@ import { logStructuredEvent } from "@/lib/observability/logger";
 
 import { getEmbeddingProviderForRepository } from "@/lib/embeddings/router";
 
-export interface RepositoryEmbeddingContext {
+interface RepositoryEmbeddingContext {
   isPrivate?: boolean;
   embeddingProvider?: string | null;
   embeddingModel?: string | null;

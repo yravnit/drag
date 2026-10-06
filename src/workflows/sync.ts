@@ -8,8 +8,6 @@ import { GitHubApiClient } from "@/lib/ingestion/githubApiClient";
 import { serverEnv } from "@/data/serverEnv";
 import { claimSyncBatch, settleSyncLease } from "@/lib/leases/repositoryLeases";
 
-export { claimSyncBatch, settleSyncLease };
-
 export interface SyncPayload {
   batchSize?: number;
 }

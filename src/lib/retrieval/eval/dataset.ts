@@ -160,22 +160,6 @@ export const RETRIEVAL_EVAL_DATASET: RetrievalEvalQuery[] = [
     description: "Database access layer for repository ingestion",
   },
   {
-    id: "class-NimEmbeddingProvider",
-    query: "NimEmbeddingProvider",
-    category: "exact_identifiers",
-    expectedFiles: ["src/lib/embeddings/embeddingProvider.ts"],
-    expectedSymbols: ["NimEmbeddingProvider"],
-    description: "NVIDIA NIM embedding provider class",
-  },
-  {
-    id: "class-MockEmbeddingProvider",
-    query: "MockEmbeddingProvider",
-    category: "exact_identifiers",
-    expectedFiles: ["src/lib/embeddings/embeddingProvider.ts"],
-    expectedSymbols: ["MockEmbeddingProvider"],
-    description: "Test mock embedding provider class",
-  },
-  {
     id: "class-NimLLMProvider",
     query: "NimLLMProvider",
     category: "exact_identifiers",
@@ -186,10 +170,26 @@ export const RETRIEVAL_EVAL_DATASET: RetrievalEvalQuery[] = [
 
   // Configuration variables
   {
+    id: "class-GeminiEmbeddingProvider",
+    query: "GeminiEmbeddingProvider",
+    category: "exact_identifiers",
+    expectedFiles: ["src/lib/embeddings/geminiEmbeddingProvider.ts"],
+    expectedSymbols: ["GeminiEmbeddingProvider"],
+    description: "Gemini embedding provider class used for public repositories",
+  },
+  {
+    id: "class-CloudflareEmbeddingProvider",
+    query: "CloudflareEmbeddingProvider",
+    category: "exact_identifiers",
+    expectedFiles: ["src/lib/embeddings/cloudflareEmbeddingProvider.ts"],
+    expectedSymbols: ["CloudflareEmbeddingProvider"],
+    description: "Cloudflare Workers AI embedding provider class used for private repositories",
+  },
+  {
     id: "cfg-EMBEDDING_DIMENSIONS",
     query: "EMBEDDING_DIMENSIONS",
     category: "configuration",
-    expectedFiles: ["src/db/schemas/chunks.ts", "src/lib/embeddings/config.ts"],
+    expectedFiles: ["src/db/schemas/chunks.ts"],
     description: "Vector dimensions configuration constant",
   },
   {
@@ -212,15 +212,8 @@ export const RETRIEVAL_EVAL_DATASET: RetrievalEvalQuery[] = [
     id: "err-nvidia-key-missing",
     query: "NVIDIA_API_KEY environment variable is missing",
     category: "error_debugging",
-    expectedFiles: ["src/lib/embeddings/embeddingProvider.ts", "src/lib/llm/llmProvider.ts"],
+    expectedFiles: ["src/lib/llm/llmProvider.ts"],
     description: "Missing NVIDIA API key error message",
-  },
-  {
-    id: "err-nvidia-403",
-    query: "NVIDIA NIM API Authorization failed (HTTP 403 Forbidden)",
-    category: "error_debugging",
-    expectedFiles: ["src/lib/embeddings/embeddingProvider.ts"],
-    description: "HTTP 403 Forbidden error handler for NIM API",
   },
 
   // File and path lookup

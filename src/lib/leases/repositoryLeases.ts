@@ -2,7 +2,7 @@ import { Database } from "@/db/db";
 import { chunks, repositories } from "@/db/schema";
 import { and, eq, inArray, isNull, lt, ne, or } from "drizzle-orm";
 
-export const LEASE_DURATION_MS = 10 * 60 * 1000;
+const LEASE_DURATION_MS = 10 * 60 * 1000;
 
 export async function claimEmbeddingLease(database: Database, repositoryId: string) {
   return await database.transaction(async (tx) => {

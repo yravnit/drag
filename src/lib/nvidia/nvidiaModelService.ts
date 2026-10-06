@@ -2,8 +2,8 @@ import { Database } from "@/db/db";
 import { nvidiaModels } from "@/db/schemas/nvidiaModels";
 import { and, eq, notInArray } from "drizzle-orm";
 
-export const NVIDIA_MODELS_API_URL = "https://integrate.api.nvidia.com/v1/models";
-export const NVIDIA_CHAT_COMPLETIONS_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
+const NVIDIA_MODELS_API_URL = "https://integrate.api.nvidia.com/v1/models";
+const NVIDIA_CHAT_COMPLETIONS_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
 
 const NON_CHAT_KEYWORDS = [
   "embedding",

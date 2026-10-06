@@ -6,8 +6,8 @@ import {
 } from "./embeddingProvider";
 
 export const GEMINI_EMBEDDING_MODEL = "gemini-embedding-2";
-export const GEMINI_EMBEDDING_DIMENSIONS = 768;
-export const GEMINI_MAX_BATCH_SIZE = 25;
+const GEMINI_EMBEDDING_DIMENSIONS = 768;
+const GEMINI_MAX_BATCH_SIZE = 25;
 
 interface GeminiBatchEmbedResponse {
   embeddings?: Array<{ values: number[] }>;

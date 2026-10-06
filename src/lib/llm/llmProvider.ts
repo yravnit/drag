@@ -13,7 +13,7 @@ export interface LLMGenerateOptions {
   model?: string;
 }
 
-export interface LLMProvider {
+interface LLMProvider {
   generate(options: LLMGenerateOptions): Promise<string>;
   stream(options: LLMGenerateOptions): Promise<AsyncIterable<string>>;
 }

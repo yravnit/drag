@@ -12,14 +12,13 @@ export const serverEnv = createEnv({
     GITHUB_TOKEN: z.string().min(1).optional(),
     // Optional: used to secure Vercel Cron routes in production
     CRON_SECRET: z.string().min(1).optional(),
-    // Embedding configuration (NVIDIA NIM API with llama-nemotron-embed-1b-v2)
-    // NVIDIA_API_KEY is required when using the hosted NVIDIA endpoint.
+    // NVIDIA_API_KEY is for LLM text generation (NimLLMProvider) and the weekly model
+    // discovery cron. It is NOT used for embeddings: those go to Gemini or Cloudflare,
+    // selected per repository in src/lib/embeddings/router.ts.
     NVIDIA_API_KEY: z.string().min(1).optional(),
-    EMBEDDING_MODEL: z.string().default("nvidia/llama-nemotron-embed-1b-v2"),
     // Fixed at 768 — must match the vector(768) column in the chunks table and HNSW index.
     // Do not change this without a corresponding DB migration.
     EMBEDDING_DIMENSIONS: z.coerce.number().int().positive().default(768),
-    EMBEDDING_BASE_URL: z.url().default("https://integrate.api.nvidia.com/v1"),
     // Google Gemini API Configuration (Public repository embeddings)
     GEMINI_API_KEY: z.string().min(1).optional(),
     // Cloudflare Workers AI Configuration (Private repository embeddings)
@@ -36,12 +35,3 @@ export const serverEnv = createEnv({
   emptyStringAsUndefined: true,
 });
 
-// Runtime guard: NVIDIA_API_KEY must be set when using the hosted NVIDIA NIM endpoint.
-// This is checked here (not in the schema) because it is a cross-field dependency.
-const NVIDIA_HOSTED_BASE_URL = "https://integrate.api.nvidia.com/v1";
-if (serverEnv.EMBEDDING_BASE_URL === NVIDIA_HOSTED_BASE_URL && !serverEnv.NVIDIA_API_KEY) {
-  throw new Error(
-    "NVIDIA_API_KEY is required when EMBEDDING_BASE_URL is the hosted NVIDIA NIM endpoint. " +
-    "Set NVIDIA_API_KEY in your environment or configure a self-hosted EMBEDDING_BASE_URL.",
-  );
-}
