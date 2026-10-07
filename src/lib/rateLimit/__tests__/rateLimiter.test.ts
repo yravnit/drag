@@ -10,24 +10,20 @@ interface CapturedStatement {
   setCountSql: string;
   setCountParams: unknown[];
   setOther: Record<string, unknown>;
+  allowedSql: string;
+  allowedParams: unknown[];
 }
 
 /**
  * Stubs the database at the upsert boundary. `onConflictDoUpdate` is evaluated against a real
- * in-memory row using the CASE the caller supplied, with `maxRequests` read back out of the
- * rendered SQL params rather than duplicated here, so changing the cap in the SQL cannot leave
- * this stub asserting a stale number.
+ * in-memory row using the same rules as the SQL, with `maxRequests` read back out of the rendered
+ * `RETURNING` params rather than duplicated here, so changing the cap in the SQL cannot leave this
+ * stub asserting a stale number.
  */
 function createStubDb(initialRecords: Record<string, any> = {}) {
   const store = new Map<string, any>(Object.entries(initialRecords));
   const statements: CapturedStatement[] = [];
   let selectCalls = 0;
-
-  /**
-   * Both rendered expressions carry the cap as their last bind param, so the stub reads it from the
-   * SQL instead of hard-coding a number that could drift from the implementation.
-   */
-  const capFrom = (params: unknown[]) => Number(params[params.length - 1]);
 
   const client = {
     select: () => {
@@ -37,44 +33,47 @@ function createStubDb(initialRecords: Record<string, any> = {}) {
     insert: () => ({
       values: (values: Record<string, any>) => ({
         onConflictDoUpdate: ({ set }: any) => ({
-          returning: async () => {
+          returning: async (selection: any) => {
             const countRendered = dialect.sqlToQuery(set.count);
+            const allowedRendered = dialect.sqlToQuery(selection.allowed);
             const statementsPush: CapturedStatement = {
               values,
               setCountSql: countRendered.sql,
               setCountParams: countRendered.params,
               setOther: set,
+              allowedSql: allowedRendered.sql,
+              allowedParams: allowedRendered.params,
             };
             statements.push(statementsPush);
 
-            const cap = capFrom(countRendered.params);
+            // The cap travels as a bind param in the returned `allowed` expression.
+            const cap = Number(allowedRendered.params[0]);
             const key = `${values.userId}:${values.action}`;
             const existing = store.get(key);
 
             if (!existing) {
               // INSERT path: the row is created with count 1 inside the current window.
               store.set(key, { ...values });
-              return [{ count: 1, windowEnd: values.windowEnd, allowed: cap >= 1 }];
+              return [{ count: 1, windowEnd: values.windowEnd, allowed: 1 <= cap }];
             }
 
+            // The counter advances unconditionally; `allowed` reads the post-update value.
             const expired = existing.windowEnd.getTime() <= values.updatedAt.getTime();
-            const nextCount = expired ? 1 : existing.count < cap ? existing.count + 1 : existing.count;
-            const allowed = expired || existing.count < cap;
+            const storedCount = expired ? 1 : existing.count + 1;
 
             store.set(key, {
               ...existing,
-              count: nextCount,
+              count: storedCount,
               windowStart: expired ? values.windowStart : existing.windowStart,
               windowEnd: expired ? values.windowEnd : existing.windowEnd,
               updatedAt: values.updatedAt,
             });
 
-            const row = store.get(key);
             return [
               {
-                count: row.count,
-                windowEnd: row.windowEnd,
-                allowed,
+                count: Math.min(storedCount, cap),
+                windowEnd: existing.windowEnd,
+                allowed: storedCount <= cap,
               },
             ];
           },
@@ -154,13 +153,14 @@ describe("consumeCounter", () => {
     expect(store.get("user-1:chat").count).toBe(3);
   });
 
-  it("rejects and stops inflating once maxRequests is reached", async () => {
+  it("grants the last available slot instead of consuming it and rejecting", async () => {
     const now = new Date();
     const { db, store } = createStubDb({
       "user-1:chat": {
         userId: "user-1",
         action: "chat",
-        count: 3,
+        // One below the cap: this request is the last slot.
+        count: 24,
         windowStart: now,
         windowEnd: new Date(now.getTime() + 60000),
         updatedAt: now,
@@ -170,16 +170,45 @@ describe("consumeCounter", () => {
     const result = await consumeCounter(db, {
       userId: "user-1",
       action: "chat",
-      maxRequests: 3,
+      maxRequests: 25,
+      windowStart: now,
+      windowEnd: new Date(now.getTime() + 60000),
+      now,
+    });
+
+    // RETURNING reads the updated row, so the previous `count < max` test evaluated 25 < 25 and
+    // reported this request as rejected while still consuming the slot.
+    expect(result.allowed).toBe(true);
+    expect(result.count).toBe(25);
+    expect(store.get("user-1:chat").count).toBe(25);
+  });
+
+  it("rejects once the counter passes maxRequests without granting another slot", async () => {
+    const now = new Date();
+    const { db, store } = createStubDb({
+      "user-1:chat": {
+        userId: "user-1",
+        action: "chat",
+        count: 25,
+        windowStart: now,
+        windowEnd: new Date(now.getTime() + 60000),
+        updatedAt: now,
+      },
+    });
+
+    const result = await consumeCounter(db, {
+      userId: "user-1",
+      action: "chat",
+      maxRequests: 25,
       windowStart: now,
       windowEnd: new Date(now.getTime() + 60000),
       now,
     });
 
     expect(result.allowed).toBe(false);
-    expect(result.count).toBe(3);
-    // Rejected requests must not inflate usage: 3/3 stays 3/3, not 4/3.
-    expect(store.get("user-1:chat").count).toBe(3);
+    // Reported usage keeps meaning "consumed", so the rejection does not inflate it.
+    expect(result.count).toBe(25);
+    expect(store.get("user-1:chat").count).toBe(26);
   });
 
   it("starts a fresh window when the stored window has expired", async () => {
@@ -211,7 +240,7 @@ describe("consumeCounter", () => {
     expect(store.get("user-1:chat").windowEnd.getTime()).toBeGreaterThan(now.getTime());
   });
 
-  it("encodes the limit and window reset in one CASE expression", async () => {
+  it("encodes the window reset and the limit in one statement", async () => {
     const { db, statements } = createStubDb();
 
     await consumeCounter(db, {
@@ -226,7 +255,8 @@ describe("consumeCounter", () => {
     expect(sqlText).toContain('"rate_limits"."window_end" <=');
     expect(sqlText).toContain('"rate_limits"."count" + 1');
     // The cap travels as a bind param, so the same statement is reused for every limit.
-    expect(statements[0].setCountParams).toContain(7);
+    expect(statements[0].allowedParams).toContain(7);
+    expect(statements[0].allowedSql).toContain('"rate_limits"."count" <=');
   });
 });
 

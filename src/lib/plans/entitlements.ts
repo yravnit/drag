@@ -2,7 +2,7 @@ import { Database } from "@/db/db";
 import { user } from "@/db/schemas/auth";
 import { userRepositories } from "@/db/schemas/userRepositories";
 import { rateLimits } from "@/db/schemas/rateLimits";
-import { and, eq, gt, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { consumeCounter, type DbOrTx as CounterDbOrTx } from "@/lib/rateLimit/rateLimiter";
 import {
   PlanType,
@@ -418,11 +418,18 @@ export async function checkAndConsumeMonthlyQueryQuota(
  *
  * The decrement is a single SQL statement. A read-modify-write would let a concurrent
  * consumption commit between the read and the write, and the absolute write would erase it.
+ *
+ * `windowEnd` must be the window that was actually consumed (the `resetAt` returned by
+ * {@link checkAndConsumeMonthlyQueryQuota}), not "whatever window is open now". A request that
+ * consumed just before midnight and failed just after would otherwise decrement the new month's
+ * row and erase a different month's usage.
+ *
  * Rollback failures are logged, never thrown, so they cannot mask the upstream error.
  */
 export async function rollbackMonthlyQueryQuota(
   database: Database,
   userId: string,
+  windowEnd: Date,
   now: Date = new Date(),
 ): Promise<void> {
   const performRollback = async (client: DbOrTx) => {
@@ -434,7 +441,7 @@ export async function rollbackMonthlyQueryQuota(
           and(
             eq(rateLimits.userId, userId),
             eq(rateLimits.action, RAG_MONTHLY_QUOTA_ACTION),
-            gt(rateLimits.windowEnd, now),
+            eq(rateLimits.windowEnd, windowEnd),
           ),
         );
     } catch (err) {

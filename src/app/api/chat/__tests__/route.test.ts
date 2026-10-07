@@ -246,7 +246,13 @@ describe("POST /api/chat", () => {
     );
 
     expect(response.status).toBe(500);
-    expect(mockRollbackMonthlyQueryQuota).toHaveBeenCalledWith(expect.anything(), "user-1");
+    // The consumed window is passed through, so a failure at month end cannot decrement the next
+    // month's counter.
+    expect(mockRollbackMonthlyQueryQuota).toHaveBeenCalledWith(
+      expect.anything(),
+      "user-1",
+      expect.any(Date),
+    );
   });
 
   it("skips rollback for unmetered plans where nothing was consumed", async () => {

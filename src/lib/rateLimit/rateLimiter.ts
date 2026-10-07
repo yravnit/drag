@@ -31,6 +31,7 @@ export interface ConsumeCounterOptions {
 
 export interface ConsumeCounterResult {
   allowed: boolean;
+  /** Usage within the window, clamped to `maxRequests`. */
   count: number;
   windowEnd: Date;
 }
@@ -46,6 +47,10 @@ export interface ConsumeCounterResult {
  *
  * One statement closes both holes. The insert takes the row lock for a brand new counter, and a
  * conflicting request blocks until the winner commits and then increments the committed row.
+ *
+ * `allowed` is the post-update `count <= maxRequests` because RETURNING evaluates against the
+ * updated row. Clamping the stored counter instead made the last available slot look consumed *and*
+ * rejected, so a Free user got 24 of their 25 monthly queries.
  */
 export async function consumeCounter(
   client: DbOrTx,
@@ -56,10 +61,8 @@ export async function consumeCounter(
 
   // `window_end <= now` means the previous window is over, so this request starts a fresh one.
   // Unqualified column references inside ON CONFLICT DO UPDATE read the pre-update row, which is
-  // what makes these two expressions safe to compute in the same statement as the write.
+  // what makes this expression safe to compute in the same statement as the write.
   const expired = sql`${rateLimits.windowEnd} <= ${now}`;
-  const windowReset = sql`CASE WHEN ${expired} THEN true ELSE false END`;
-  const underLimit = sql`${rateLimits.count} < ${maxRequests}`;
 
   const rows = (await client
     .insert(rateLimits)
@@ -74,14 +77,12 @@ export async function consumeCounter(
     .onConflictDoUpdate({
       target: [rateLimits.userId, rateLimits.action],
       set: {
-        // A saturated counter stays at maxRequests rather than inflating on rejected requests,
-        // so the reported usage keeps meaning "consumed", not "attempted". Rejection itself is
-        // decided by `allowed` below, which reads the pre-update count.
-        count: sql`CASE
-          WHEN ${expired} THEN 1
-          WHEN ${underLimit} THEN ${rateLimits.count} + 1
-          ELSE ${rateLimits.count}
-        END`,
+        // The counter always advances. RETURNING reads the *updated* row, so a counter that
+        // clamped at maxRequests could not tell "this request took the last slot" from "the
+        // counter was already full": both end at maxRequests. Advancing unconditionally makes the
+        // stored value an attempt count and lets the returned flag below answer exactly that
+        // question. Rejections overshoot rather than being granted a slot.
+        count: sql`CASE WHEN ${expired} THEN 1 ELSE ${rateLimits.count} + 1 END`,
         windowStart: sql`CASE WHEN ${expired} THEN ${windowStart} ELSE ${rateLimits.windowStart} END`,
         windowEnd: sql`CASE WHEN ${expired} THEN ${windowEnd} ELSE ${rateLimits.windowEnd} END`,
         updatedAt: now,
@@ -90,13 +91,16 @@ export async function consumeCounter(
     .returning({
       count: rateLimits.count,
       windowEnd: rateLimits.windowEnd,
-      allowed: sql<boolean>`${windowReset} OR ${underLimit}`,
+      // Post-update count <= maxRequests is exactly "the count was below the limit before this
+      // statement", i.e. this request consumed a slot.
+      allowed: sql<boolean>`${rateLimits.count} <= ${maxRequests}`,
     })) as Array<{ count: number; windowEnd: Date; allowed: boolean }>;
 
   const row = rows[0];
   return {
     allowed: row.allowed,
-    count: row.count,
+    // Clamped so callers keep reading usage as "consumed", not "attempted".
+    count: Math.min(row.count, maxRequests),
     windowEnd: row.windowEnd,
   };
 }

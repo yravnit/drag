@@ -232,6 +232,36 @@ describe('IngestionDatabaseLayer', () => {
       expect(tx.insert).toHaveBeenCalledTimes(2); // chunks + repository_files
       expect(tx.update).toHaveBeenCalledOnce();
     });
+
+    it('persists verified visibility so incremental embedding never picks Gemini for a private repo', async () => {
+      tx.delete.mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
+      tx.insert.mockReturnValue({
+        values: vi.fn().mockReturnValue({
+          onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
+        }),
+      });
+      let saved: any = null;
+      tx.update.mockReturnValue({
+        set: vi.fn().mockImplementation((values: any) => {
+          saved = values;
+          return { where: vi.fn().mockResolvedValue(undefined) };
+        }),
+      });
+      stubDb.transaction.mockImplementation(async (fn: (tx: StubTx) => Promise<void>) => {
+        await fn(tx);
+      });
+
+      const layer = new IngestionDatabaseLayer(stubDb as unknown as Database);
+      await layer.saveIncrementalChunks(
+        'repo-123',
+        [makeProcessedFile('src/modified.ts', [{ text: 'newCode' }])],
+        [],
+        makeMetadata({ isPrivate: true }),
+      );
+
+      // runEmbedBatch reads repositories.isPrivate to choose between Gemini and Cloudflare.
+      expect(saved.isPrivate).toBe(true);
+    });
   });
 
   describe('persistProcessedFilesChunks', () => {

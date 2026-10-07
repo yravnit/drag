@@ -63,6 +63,7 @@ export default function Home() {
     label: string;
   } | null>(null);
   const [repoDeletePending, setRepoDeletePending] = useState(false);
+  const [repoDeleteError, setRepoDeleteError] = useState<string | null>(null);
 
   const [conversationsList, setConversationsList] = useState<ConversationThread[]>([]);
   const [convsLoading, setConvsLoading] = useState(false);
@@ -99,11 +100,19 @@ export default function Home() {
   const [selectedModel, setSelectedModel] = useState<string>("default");
   const [responseMode, setResponseMode] = useState<ResponseMode>("precise");
 
-  // Monotonic request ids. Selecting a repository or thread while a slower request for the
-  // previous one is still in flight used to let the late response overwrite the current view,
-  // putting thread A's answer and citations under thread B.
-  const requestIdRef = useRef(0);
-  const nextRequestId = useCallback(() => ++requestIdRef.current, []);
+// Monotonic request ids, one per independently-cancelled load. Selecting a repository or thread
+  // while a slower request for the previous one is still in flight used to let the late response
+  // overwrite the current view, putting thread A's answer and citations under thread B.
+  //
+  // Conversations and messages are separate counters because they are separate loads: the repository
+  // effect clears `selectedConversation`, which ran the message effect and advanced a shared
+  // counter, discarding the conversation response it had just started and leaving `convsLoading`
+  // stuck on. A stale call is also rejected *before* it sets loading state, so a superseded stream
+  // completion cannot strand the spinner on the current thread.
+  const convsRequestIdRef = useRef(0);
+  const messagesRequestIdRef = useRef(0);
+  const nextConvsRequestId = useCallback(() => ++convsRequestIdRef.current, []);
+  const nextMessagesRequestId = useCallback(() => ++messagesRequestIdRef.current, []);
 
   // Network Fetchers
   const loadUserRepos = useCallback(async () => {
@@ -127,52 +136,58 @@ export default function Home() {
   }, []);
 
   const loadConversations = useCallback(
-    async (repoId: string, requestId = nextRequestId()) => {
+    async (repoId: string, requestId = nextConvsRequestId()) => {
+      // Reject a superseded call before touching loading state, otherwise it would raise the
+      // spinner and never clear it.
+      if (requestId !== convsRequestIdRef.current) return;
       setConvsLoading(true);
       setConvsError(null);
       try {
         const res = await fetch(`/api/conversations?repositoryId=${repoId}`);
         const data = res.ok ? await res.json() : await res.json();
         // A newer selection has taken over; this response describes a repository no longer shown.
-        if (requestId !== requestIdRef.current) return;
+        if (requestId !== convsRequestIdRef.current) return;
         if (res.ok) {
           setConversationsList(data);
         } else {
           setConvsError(data.error || "Failed to load conversations");
         }
       } catch (err) {
-        if (requestId !== requestIdRef.current) return;
+        if (requestId !== convsRequestIdRef.current) return;
         console.error("Failed to load conversations:", err);
         setConvsError("Network error while loading conversations");
       } finally {
-        if (requestId === requestIdRef.current) setConvsLoading(false);
+        if (requestId === convsRequestIdRef.current) setConvsLoading(false);
       }
     },
-    [nextRequestId],
+    [nextConvsRequestId],
   );
 
   const loadMessages = useCallback(
-    async (convId: string, requestId = nextRequestId()) => {
+    async (convId: string, requestId = nextMessagesRequestId()) => {
+      // An old stream's completion calls this with its own id after the user has moved on. Bail
+      // before setting loading state, or the current thread shows a spinner forever.
+      if (requestId !== messagesRequestIdRef.current) return;
       setMessagesLoading(true);
       setMessagesError(null);
       try {
         const res = await fetch(`/api/conversations/${convId}/messages`);
         const data = await res.json();
-        if (requestId !== requestIdRef.current) return;
+        if (requestId !== messagesRequestIdRef.current) return;
         if (res.ok) {
           setMessagesList(data);
         } else {
           setMessagesError(data.error || "Failed to load messages");
         }
       } catch (err) {
-        if (requestId !== requestIdRef.current) return;
+        if (requestId !== messagesRequestIdRef.current) return;
         console.error("Failed to load messages:", err);
         setMessagesError("Network error while loading messages");
       } finally {
-        if (requestId === requestIdRef.current) setMessagesLoading(false);
+        if (requestId === messagesRequestIdRef.current) setMessagesLoading(false);
       }
     },
-    [nextRequestId],
+    [nextMessagesRequestId],
   );
 
   const loadGithubRepos = useCallback(async (page = 1) => {
@@ -217,9 +232,8 @@ export default function Home() {
 
   // Load conversations when selected repository changes
   useEffect(() => {
-    const requestId = nextRequestId();
     if (selectedRepo) {
-      loadConversations(selectedRepo.id, requestId);
+      loadConversations(selectedRepo.id, nextConvsRequestId());
       setSelectedConversation(null);
       setMessagesList([]);
       setStatusTracker({
@@ -237,7 +251,7 @@ export default function Home() {
       setMessagesList([]);
       setStatusTracker(null);
     }
-  }, [selectedRepo, loadConversations, nextRequestId]);
+  }, [selectedRepo, loadConversations, nextConvsRequestId]);
 
   /**
    * Fetch status once for the selected repository, then poll only while indexing is still active.
@@ -302,13 +316,13 @@ export default function Home() {
   // Load messages when selected conversation changes. Switching threads invalidates any in-flight
   // message request for the thread being left.
   useEffect(() => {
-    const requestId = nextRequestId();
+    const requestId = nextMessagesRequestId();
     if (selectedConversation) {
       loadMessages(selectedConversation.id, requestId);
     } else {
       setMessagesList([]);
     }
-  }, [selectedConversation, loadMessages, nextRequestId]);
+  }, [selectedConversation, loadMessages, nextMessagesRequestId]);
 
   // Triggered when modal opens
   useEffect(() => {
@@ -486,7 +500,7 @@ export default function Home() {
     // Captured so the stream and its completion reload stay bound to this thread, even if the user
     // switches conversations while the response is still arriving.
     const conversationId = selectedConversation.id;
-    const requestId = nextRequestId();
+    const requestId = nextMessagesRequestId();
     setMessageText("");
     setChatError("");
     setIsStreaming(true);
@@ -536,7 +550,7 @@ export default function Home() {
         // Reload from the server instead of leaving a local temp bubble behind. A temp id is not a
         // UUID, so retrying it later would send an unparseable value as retryMessageId and fail
         // before generation ever starts.
-        if (requestId === requestIdRef.current) {
+        if (requestId === messagesRequestIdRef.current) {
           setMessagesList((prev) =>
             prev.map((msg) =>
               msg.id === tempAssistantId
@@ -565,7 +579,7 @@ export default function Home() {
         const textChunk = decoder.decode(value, { stream: true });
         streamText += textChunk;
 
-        if (requestId !== requestIdRef.current) continue;
+        if (requestId !== messagesRequestIdRef.current) continue;
         setMessagesList((prev) =>
           prev.map((msg) =>
             msg.id === tempAssistantId ? { ...msg, content: streamText } : msg,
@@ -579,7 +593,7 @@ export default function Home() {
     } catch (err) {
       const message = err instanceof Error ? err.message : "";
       console.error("Chat error:", err);
-      if (requestId !== requestIdRef.current) return;
+      if (requestId !== messagesRequestIdRef.current) return;
       setChatError(message || "An unexpected error occurred");
       setMessagesList((prev) =>
         prev.map((msg) =>
@@ -617,7 +631,7 @@ export default function Home() {
     // and the reload below replaces the local bubble with the saved rows.
     const isSavedMessage = !failedMsg.id.startsWith("temp-");
     const conversationId = selectedConversation.id;
-    const requestId = nextRequestId();
+    const requestId = nextMessagesRequestId();
 
     setIsStreaming(true);
     setChatError("");
@@ -655,7 +669,7 @@ export default function Home() {
           : (data.error || "Generation retry failed");
 
         setChatError(errText);
-        if (requestId !== requestIdRef.current) return;
+        if (requestId !== messagesRequestIdRef.current) return;
         setMessagesList((prev) =>
           prev.map((msg) =>
             msg.id === failedMsg.id
@@ -680,7 +694,7 @@ export default function Home() {
         const textChunk = decoder.decode(value, { stream: true });
         streamText += textChunk;
 
-        if (requestId !== requestIdRef.current) continue;
+        if (requestId !== messagesRequestIdRef.current) continue;
         setMessagesList((prev) =>
           prev.map((msg) =>
             msg.id === failedMsg.id ? { ...msg, content: streamText } : msg,
@@ -693,7 +707,7 @@ export default function Home() {
     } catch (err) {
       const message = err instanceof Error ? err.message : "";
       console.error("Chat retry error:", err);
-      if (requestId !== requestIdRef.current) return;
+      if (requestId !== messagesRequestIdRef.current) return;
       setChatError(message || "An unexpected error occurred during retry");
       setMessagesList((prev) =>
         prev.map((msg) =>
@@ -871,12 +885,13 @@ export default function Home() {
       chatError={chatError}
       selectedCitation={citationDetail}
       onSelectRepo={setSelectedRepo}
-      onDeleteRepo={(repoId) =>
+      onDeleteRepo={(repoId) => {
+        setRepoDeleteError(null);
         setPendingRepoDelete({
           id: repoId,
           label: `${repositoriesList.find((r) => r.id === repoId)?.owner ?? ""}/${repositoriesList.find((r) => r.id === repoId)?.name ?? "repository"}`,
-        })
-      }
+        });
+      }}
       onRetryRepo={handleRetryRepo}
       onOpenAddModal={() => setIsAddingRepo(true)}
       onCloseAddModal={() => setIsAddingRepo(false)}
@@ -909,17 +924,28 @@ export default function Home() {
         isOpen={pendingRepoDelete !== null}
         title="Remove repository?"
         message={`"${pendingRepoDelete?.label ?? "This repository"}" will be removed from your workspace. The indexed chunks and its chat threads are deleted. Re-adding it later re-indexes from scratch.`}
+        error={repoDeleteError}
         pending={pendingRepoDelete !== null && repoDeletePending}
         onConfirm={async () => {
           if (!pendingRepoDelete) return;
           setRepoDeletePending(true);
+          setRepoDeleteError(null);
           try {
             await handleDeleteRepo(pendingRepoDelete.id);
+          } catch (err) {
+            // handleDeleteRepo throws on a non-OK response. RepoList's handler only opens this
+            // dialog, so an uncaught error here just stops the spinner and says nothing.
+            setRepoDeleteError(
+              err instanceof Error ? err.message : "Could not remove this repository.",
+            );
           } finally {
             setRepoDeletePending(false);
           }
         }}
-        onCancel={() => setPendingRepoDelete(null)}
+        onCancel={() => {
+          setPendingRepoDelete(null);
+          setRepoDeleteError(null);
+        }}
       />
     </>
   );

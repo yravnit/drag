@@ -270,7 +270,7 @@ export async function POST(request: Request) {
     }
 
     // 7. Insert or check repository row
-    let repoId: string;
+    let repoId: string | undefined;
     const [existingByGithubId] = await db
       .select()
       .from(repositories)
@@ -280,12 +280,18 @@ export async function POST(request: Request) {
     // Rows created before `github_id` existed have it null, so the github-id lookup misses them and
     // the later insert then fails on the unique URL. Fall back to the URL and backfill the id so
     // the row becomes findable by github id on every later request.
+    //
+    // Scoped to `githubId IS NULL` deliberately. A row that already carries a *different* GitHub ID
+    // is a different repository that happens to sit at a recycled URL (deleted private repo, then a
+    // public one created at the same path). Reusing it would swap the row's GitHub ID while keeping
+    // the old private source's chunks and `ready` status, so the new public repo would be answered
+    // from the previous owner's code.
     let existing = existingByGithubId;
     if (!existing) {
       const [existingByUrl] = await db
         .select()
         .from(repositories)
-        .where(eq(repositories.url, meta.html_url))
+        .where(and(eq(repositories.url, meta.html_url), isNull(repositories.githubId)))
         .limit(1);
       if (existingByUrl) {
         await db
@@ -384,59 +390,77 @@ export async function POST(request: Request) {
           .where(eq(repositories.id, existing.id));
       }
     } else {
-      const [inserted] = await db
-        .insert(repositories)
-        .values({
-          githubId,
-          name: meta.name,
-          owner: meta.owner.login,
-          url: meta.html_url,
-          defaultBranch: targetBranch,
-          description: meta.description,
-          primaryLanguage: meta.language,
-          isPrivate,
-          embeddingProvider: defaultMeta.embeddingProvider,
-          embeddingModel: defaultMeta.embeddingModel,
-          embeddingDimensions: defaultMeta.embeddingDimensions,
-          embeddingStatus: "processing",
-        })
-        .returning();
-      repoId = inserted.id;
+      // The row itself is created inside the limit-check transaction below. Inserting it here
+      // would leave an unowned `processing` row behind whenever the limit rejects the request,
+      // which sync would then pick up as real work.
       shouldStartIngest = true;
     }
 
-    // 8. Enforce the plan repository limit and create the association in one transaction.
-    // The user row lock is held across the insert, so two concurrent requests cannot both
-    // observe the same count and both insert. Existing associations are exempt, which keeps
+    // 8. Enforce the plan repository limit and create the repository + association in one
+    // transaction. The user row lock is held across the inserts, so two concurrent requests cannot
+    // both observe the same count and both insert. Existing associations are exempt, which keeps
     // retry and re-add paths working for users already at their limit. The repository row lock
     // serializes this attach against a concurrent DELETE /api/repos/[id].
     const limitCheck = await db.transaction(async (tx) => {
-      const check = await checkRepositoryLimit(tx as unknown as Database, session.user.id, repoId);
-      if (!check.allowed) return check;
+      // A brand-new repository has no association yet, so it cannot be exempt; pass the id only
+      // when the row already exists.
+      const check = await checkRepositoryLimit(
+        tx as unknown as Database,
+        session.user.id,
+        existing?.id,
+      );
+      if (!check.allowed) return { ...check, repoId: existing?.id };
+
+      let targetRepoId = existing?.id;
+      if (!targetRepoId) {
+        const [inserted] = await tx
+          .insert(repositories)
+          .values({
+            githubId,
+            name: meta.name,
+            owner: meta.owner.login,
+            url: meta.html_url,
+            defaultBranch: targetBranch,
+            description: meta.description,
+            primaryLanguage: meta.language,
+            isPrivate,
+            embeddingProvider: defaultMeta.embeddingProvider,
+            embeddingModel: defaultMeta.embeddingModel,
+            embeddingDimensions: defaultMeta.embeddingDimensions,
+            embeddingStatus: "processing",
+          })
+          .returning();
+        targetRepoId = inserted.id;
+      }
 
       // Matches the lock the detach route holds while it recounts associations.
       await tx
         .select({ id: repositories.id })
         .from(repositories)
-        .where(eq(repositories.id, repoId))
+        .where(eq(repositories.id, targetRepoId))
         .for("update");
 
       const [alreadyJoined] = await tx
         .select()
         .from(userRepositories)
         .where(
-          and(eq(userRepositories.userId, session.user.id), eq(userRepositories.repositoryId, repoId)),
+          and(
+            eq(userRepositories.userId, session.user.id),
+            eq(userRepositories.repositoryId, targetRepoId),
+          ),
         )
         .limit(1);
 
       if (!alreadyJoined) {
         await tx.insert(userRepositories).values({
           userId: session.user.id,
-          repositoryId: repoId,
+          repositoryId: targetRepoId,
         });
       }
-      return check;
+      return { ...check, repoId: targetRepoId };
     });
+
+    repoId = limitCheck.repoId;
 
     if (!limitCheck.allowed) {
       return NextResponse.json(

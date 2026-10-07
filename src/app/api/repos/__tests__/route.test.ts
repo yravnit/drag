@@ -464,6 +464,80 @@ describe("POST /api/repos", () => {
     ]);
   });
 
+  it("does not reuse a URL row that already carries a different github_id", async () => {
+    mockGetSession.mockResolvedValueOnce({ user: { id: "user-1" } } as any);
+    mockGetAccessToken.mockResolvedValueOnce({ accessToken: "token-123" });
+    // A new public repository created at a URL an indexed private repository used to occupy.
+    mockGetRepository.mockResolvedValueOnce({
+      id: 222,
+      name: "recycled",
+      owner: { login: "owner" },
+      html_url: "https://github.com/owner/recycled",
+      default_branch: "main",
+      private: false,
+    });
+    mockGetCommit.mockResolvedValueOnce({ sha: "sha-123" });
+    mockGetTree.mockResolvedValueOnce({ tree: [{ type: "blob", size: 10 }], truncated: false });
+
+    // The old private repository's row: different github_id, `ready`, chunks already embedded.
+    const staleRow = {
+      id: "stale-private-id",
+      githubId: BigInt(111),
+      embeddingStatus: "ready",
+      name: "recycled",
+      owner: "owner",
+      url: "https://github.com/owner/recycled",
+      defaultBranch: "main",
+      isPrivate: true,
+    };
+
+    const inserted: any[] = [];
+    mockDbSelect.mockImplementation(() => {
+      const chain = createSelectChain();
+      const originalFrom = chain.from;
+      chain.from = vi.fn().mockImplementation((table: any) => {
+        const result = originalFrom(table);
+        const isRepositories =
+          table?.githubId === "repositories_githubId" || table === "repositories";
+        if (!isRepositories) return result;
+        // Both lookups (github id, then URL) find nothing: the URL row is filtered out by
+        // `githubId IS NULL`, so it must never be returned here.
+        return {
+          ...result,
+          where: vi.fn().mockReturnValue(
+            Object.assign(Promise.resolve([]), {
+              limit: vi.fn().mockResolvedValue([]),
+              for: vi.fn().mockResolvedValue([]),
+            }),
+          ),
+        };
+      });
+      return chain;
+    });
+
+    mockDbInsert.mockImplementation(() => ({
+      values: vi.fn().mockImplementation((val: any) => {
+        inserted.push(val);
+        return { returning: vi.fn().mockResolvedValue([{ id: "fresh-row-id" }]) };
+      }),
+    }));
+
+    const request = new Request("http://localhost/api/repos", {
+      method: "POST",
+      body: JSON.stringify({ url: "https://github.com/owner/recycled" }),
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    // The old row kept its github_id and its private chunks, so it cannot answer the new repo.
+    expect(data.repositoryId).toBe("fresh-row-id");
+    expect(data.alreadyExists).toBe(false);
+    expect(inserted[0]).toMatchObject({ githubId: BigInt(222), isPrivate: false });
+    expect(staleRow.githubId).toBe(BigInt(111));
+  });
+
   it("falls back to the URL when a legacy row has no github_id and backfills it", async () => {
     mockGetSession.mockResolvedValueOnce({ user: { id: "user-1" } } as any);
     mockGetAccessToken.mockResolvedValueOnce({ accessToken: "token-123" });
@@ -999,6 +1073,43 @@ describe("POST /api/repos", () => {
 
     expect(associationValues).toEqual({ userId: "user-1", repositoryId: "new-repo-id" });
     expect(mockWorkflowStart).toHaveBeenCalled();
+  });
+
+  it("creates the repository row inside the limit-check transaction so a rejection leaves nothing", async () => {
+    mockGetSession.mockResolvedValueOnce({ user: { id: "user-free" } } as any);
+    mockGetAccessToken.mockResolvedValueOnce({ accessToken: "token-123" });
+    mockUserRecord = { id: "user-free", plan: "free" };
+    // Free limit is 2 and this user already owns both.
+    mockUserRepos = [{ repositoryId: "repo-1" }, { repositoryId: "repo-2" }];
+    mockGetRepository.mockResolvedValueOnce({
+      id: 12345,
+      name: "third-repo",
+      owner: { login: "owner" },
+      html_url: "https://github.com/owner/third-repo",
+      default_branch: "main",
+      private: false,
+    });
+    mockGetCommit.mockResolvedValueOnce({ sha: "sha-123" });
+    mockGetTree.mockResolvedValueOnce({ tree: [{ type: "blob", size: 10 }], truncated: false });
+
+    const inserts: any[] = [];
+    mockDbInsert.mockImplementation(() => ({
+      values: vi.fn().mockImplementation((val: any) => {
+        inserts.push(val);
+        return { returning: vi.fn().mockResolvedValue([{ id: "orphan-id" }]) };
+      }),
+    }));
+
+    const request = new Request("http://localhost/api/repos", {
+      method: "POST",
+      body: JSON.stringify({ url: "https://github.com/owner/third-repo" }),
+    });
+
+    const response = await POST(request);
+    expect(response.status).toBe(403);
+    // Inserting before the limit check left unowned `processing` rows that sync would pick up.
+    expect(inserts).toHaveLength(0);
+    expect(mockWorkflowStart).not.toHaveBeenCalled();
   });
 
   it("returns 403 and does not start ingestion when the plan repository limit is reached", async () => {

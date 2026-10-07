@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { AlertTriangle, Loader2 } from "lucide-react";
+import { AlertCircle, AlertTriangle, Loader2 } from "lucide-react";
 
 interface ConfirmDialogProps {
   isOpen: boolean;
@@ -10,6 +10,8 @@ interface ConfirmDialogProps {
   confirmLabel?: string;
   cancelLabel?: string;
   pending?: boolean;
+  /** Failure from the confirmed action, shown in place of a silent no-op. */
+  error?: string | null;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -22,6 +24,7 @@ export function ConfirmDialog({
   confirmLabel = "Delete",
   cancelLabel = "Cancel",
   pending = false,
+  error = null,
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
@@ -58,6 +61,15 @@ export function ConfirmDialog({
           <div className="min-w-0">
             <h3 className="text-sm font-bold text-white">{title}</h3>
             <p className="mt-1 text-xs leading-relaxed text-zinc-400">{message}</p>
+            {error && (
+              <p
+                role="alert"
+                className="mt-2 flex items-start gap-1.5 rounded-lg border border-red-900/40 bg-red-950/20 px-2 py-1.5 text-[11px] text-red-400"
+              >
+                <AlertCircle className="mt-px h-3 w-3 shrink-0" />
+                <span>{error}</span>
+              </p>
+            )}
           </div>
         </div>
 

@@ -435,11 +435,16 @@ export class IngestionDatabaseLayer {
         const result = await persistProcessedFilesChunks(tx, repositoryId, processedFiles, now);
         totalInserted = result.totalChunksInserted;
 
-        // Update repository metadata within the same transaction
+        // Update repository metadata within the same transaction.
+        // `isPrivate` is written unconditionally: a repo that flips public -> private without being
+        // renamed keeps its stale value otherwise, and `runEmbedBatch` reads that value to pick
+        // between Gemini and Cloudflare. This is the incremental twin of `upsertRepository`, which
+        // does the same on the full path.
         await tx
           .update(repositories)
           .set({
             headCommitSha: metadata.headCommitSha,
+            isPrivate: Boolean(metadata.isPrivate),
             indexedAt: now,
             updatedAt: now,
           })

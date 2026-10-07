@@ -111,7 +111,10 @@ export async function POST(request: Request) {
     }
 
     // 5. Delegate to the conversation module.
-    // Unmetered plans consume nothing, so there is nothing to roll back for them.
+    // Unmetered plans consume nothing, so there is nothing to roll back for them. The rollback is
+    // scoped to the window that was actually consumed: at month end the "current" window is the
+    // next one, and decrementing it would erase a different month's usage.
+    const consumedWindowEnd = new Date(quotaResult.resetAt);
     const consumed = quotaResult.limit !== null;
     let result: Awaited<ReturnType<typeof answerConversation>>;
     try {
@@ -133,13 +136,13 @@ export async function POST(request: Request) {
       });
     } catch (err) {
       // Upstream failure before streaming: release the consumed query
-      if (consumed) await rollbackMonthlyQueryQuota(db, userId);
+      if (consumed) await rollbackMonthlyQueryQuota(db, userId, consumedWindowEnd);
       throw err;
     }
 
     if (!result.ok) {
       // Rollback consumed query on non-successful RAG response
-      if (consumed) await rollbackMonthlyQueryQuota(db, userId);
+      if (consumed) await rollbackMonthlyQueryQuota(db, userId, consumedWindowEnd);
       return NextResponse.json({ error: result.error }, { status: result.status });
     }
 

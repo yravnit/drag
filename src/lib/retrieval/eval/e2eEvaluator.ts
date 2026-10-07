@@ -287,6 +287,9 @@ export function evaluateE2ERag(
 
     if (isMultiFileCase && evalRes.grounded && evalRes.factuallyCorrect && evalRes.citationCorrect) {
       // Check that cited chunks or retrieved chunks reference more than one expected file
+      // Require cited support from more than one expected file. The previous
+      // `|| chunks.some(<one chunk matches any expected file>)` fallback awarded multi-file success
+      // from a single chunk, so the check immediately above it could never fail.
       const citedFiles = new Set<string>();
       for (const idx of evalRes.citationsParsed) {
         const chunk = chunks[idx - 1];
@@ -298,7 +301,7 @@ export function evaluateE2ERag(
           }
         }
       }
-      if (citedFiles.size > 1 || chunks.some((ch) => c.expectedFiles.some((ef) => ch.filePath.endsWith(ef)))) {
+      if (citedFiles.size > 1) {
         multiFileHandledCount++;
       }
     }

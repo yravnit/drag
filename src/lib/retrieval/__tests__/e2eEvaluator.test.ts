@@ -186,5 +186,77 @@ describe("End-to-End RAG Evaluator", () => {
     expect(summary.answerMetrics.multiFileHandledCount).toBe(1);
     expect(summary.answerMetrics.multiFileReasoningRate).toBe(1.0);
   });
+
+  it("does not credit multi-file reasoning when only one expected file is cited", () => {
+    const multiFileCase: E2EEvalCase = {
+      id: "multi-file-single-citation",
+      query: "How do lease claiming and embed workflow interact?",
+      category: "cross_file_reasoning",
+      evidenceType: "multi_chunk",
+      expectedFiles: ["src/lib/leases/repositoryLeases.ts", "src/workflows/embed.ts"],
+      expectedConcepts: ["claimEmbeddingLease", "embedRepository"],
+      requiredFacts: ["claimEmbeddingLease", "embedRepository"],
+      forbiddenClaims: ["redis"],
+      description: "Only one of two expected files supported the answer",
+    };
+
+    const chunkA = mockChunk({
+      id: "chunk-a",
+      filePath: "src/lib/leases/repositoryLeases.ts",
+      symbolName: "claimEmbeddingLease",
+      text: "export function claimEmbeddingLease() {}",
+    });
+    // The second expected file was retrieved and cited, but it is off by a letter so it matches
+    // nothing: `verifyCitations` treats it as unsupported and drops it.
+    const chunkB = mockChunk({
+      id: "chunk-b",
+      filePath: "src/workflows/embedTypo.ts",
+      symbolName: "embedRepository",
+      text: "export function embedRepository() {}",
+    });
+
+    const retrievalMap = new Map<string, RetrievedChunk[]>([
+      [multiFileCase.id, [chunkA, chunkB]],
+    ]);
+    const answerMap = new Map<string, string>([
+      [multiFileCase.id, "The lease is claimed by claimEmbeddingLease in [1] and run by embedRepository in [2]."],
+    ]);
+
+    const summary = evaluateE2ERag([multiFileCase], retrievalMap, answerMap);
+    expect(summary.answerMetrics.multiFileTotalCount).toBe(1);
+    // The old `|| chunks.some(...)` fallback matched this on a single expected file.
+    expect(summary.answerMetrics.multiFileHandledCount).toBe(0);
+    expect(summary.answerMetrics.multiFileReasoningRate).toBe(0.0);
+  });
+
+  it("does not credit multi-file reasoning when a second expected file was never retrieved", () => {
+    const multiFileCase: E2EEvalCase = {
+      id: "multi-file-one-retrieved",
+      query: "How do lease claiming and embed workflow interact?",
+      category: "cross_file_reasoning",
+      evidenceType: "multi_chunk",
+      expectedFiles: ["src/lib/leases/repositoryLeases.ts", "src/workflows/embed.ts"],
+      expectedConcepts: ["claimEmbeddingLease", "embedRepository"],
+      requiredFacts: ["claimEmbeddingLease"],
+      forbiddenClaims: ["redis"],
+      description: "Second expected file absent from retrieval",
+    };
+
+    const chunkA = mockChunk({
+      id: "chunk-a",
+      filePath: "src/lib/leases/repositoryLeases.ts",
+      symbolName: "claimEmbeddingLease",
+      text: "export function claimEmbeddingLease() {}",
+    });
+
+    const retrievalMap = new Map<string, RetrievedChunk[]>([[multiFileCase.id, [chunkA]]]);
+    const answerMap = new Map<string, string>([
+      [multiFileCase.id, "The lease is claimed by claimEmbeddingLease in [1]."],
+    ]);
+
+    const summary = evaluateE2ERag([multiFileCase], retrievalMap, answerMap);
+    expect(summary.answerMetrics.multiFileTotalCount).toBe(1);
+    expect(summary.answerMetrics.multiFileHandledCount).toBe(0);
+  });
 });
 

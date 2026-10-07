@@ -229,16 +229,19 @@ export function formatLoadReport(
   lines.push(` Throughput:          ${ingestionStats.throughputChunksPerSec} chunks/sec`);
   lines.push(` Heap memory delta:   ${ingestionStats.memoryDeltaMb} MB`);
   lines.push("");
-  lines.push("[3] CAPACITY & BOTTLENECK ANALYSIS");
+  lines.push("[3] SCOPE OF THESE NUMBERS");
   lines.push("------------------------------------------------------------");
-  lines.push(" Observed Bottleneck:   External LLM streaming latency (~1.5-3.5s per response)");
-  lines.push(" Safe Concurrency:      20 concurrent retrieval operations per node (<15ms P95)");
+  lines.push(" Measured above:  in-memory RRF ranking latency and local parser throughput.");
   lines.push(
-    " Observed Failure Point: Tree-sitter file size >250MB or >5,000 files (rejected by API)",
+    " Not measured:    model streaming latency, database/vector-store capacity, or the",
   );
   lines.push(
-    " Rate-Limit Protection: 30 chat req/min/user & 5 ingest req/hr/user persisted in Postgres",
+    "                  repository size/file-count limits enforced by the API routes.",
   );
+  lines.push(
+    " Configured elsewhere: chat rate limit 30 req/min/user, ingest 5 req/hr/user,",
+  );
+  lines.push("                  both persisted in Postgres (see rateLimiter.ts).");
   lines.push("============================================================");
 
   return lines.join("\n");
