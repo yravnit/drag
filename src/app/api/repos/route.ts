@@ -281,11 +281,16 @@ export async function POST(request: Request) {
     // the later insert then fails on the unique URL. Fall back to the URL and backfill the id so
     // the row becomes findable by github id on every later request.
     //
-    // Scoped to `githubId IS NULL` deliberately. A row that already carries a *different* GitHub ID
-    // is a different repository that happens to sit at a recycled URL (deleted private repo, then a
-    // public one created at the same path). Reusing it would swap the row's GitHub ID while keeping
-    // the old private source's chunks and `ready` status, so the new public repo would be answered
-    // from the previous owner's code.
+    // The decision runs in a transaction that holds `FOR UPDATE` on the URL row, and it compares
+    // ids rather than assuming any URL row is stale. Two requests adding the same repository can
+    // each miss the github-id lookup (the row does not exist yet) and then find the *other*
+    // request's freshly committed row by URL: that row carries this very `githubId`, so it is this
+    // repository and is reused, not freed.
+    //
+    // Only a URL row carrying a *different* non-null id is a different repository at a recycled URL
+    // (deleted private repo, then a public one created at the same path). Reusing it would swap the
+    // row's GitHub ID while keeping the old private source's chunks and `ready` status, so the new
+    // repository would be answered from the previous owner's code.
     //
     // That row still occupies the unique `url` column, so the insert below would fail on the
     // constraint. Release the URL from the *old* row rather than touching its identity: the old
@@ -294,32 +299,44 @@ export async function POST(request: Request) {
     // the URL that now belongs to a different repository is freed.
     let existing = existingByGithubId;
     if (!existing) {
-      const [urlRow] = await db
-        .select()
-        .from(repositories)
-        .where(eq(repositories.url, meta.html_url))
-        .limit(1);
+      const urlRowResolution = await db.transaction(async (tx) => {
+        const [urlRow] = await tx
+          .select()
+          .from(repositories)
+          .where(eq(repositories.url, meta.html_url))
+          .limit(1)
+          .for("update");
 
-      if (urlRow?.githubId === null) {
-        // Legacy row: adopt it and backfill the id so it is findable by github id from now on.
-        await db
-          .update(repositories)
-          .set({ githubId, updatedAt: new Date() })
-          .where(eq(repositories.id, urlRow.id));
-        existing = { ...urlRow, githubId };
-      } else if (urlRow) {
-        // A different repository already sits on this URL. Free the unique slot from the old row
-        // only: its github_id, chunks, conversations and associations are untouched, and it stays
-        // reachable by github_id, which is how sync, ingestion and access checks find it. Appending
-        // the id keeps the old URL on the row for debugging. The only cost is that Retry on that
-        // row now fails URL parsing, which it would anyway: GitHub no longer serves it there.
-        await db
+        if (!urlRow) return null;
+
+        if (urlRow.githubId === githubId) {
+          return urlRow;
+        }
+
+        if (urlRow.githubId === null) {
+          // Legacy row: adopt it and backfill the id so it is findable by github id from now on.
+          await tx
+            .update(repositories)
+            .set({ githubId, updatedAt: new Date() })
+            .where(eq(repositories.id, urlRow.id));
+          return { ...urlRow, githubId };
+        }
+
+        // Free the unique slot from the old row only. Appending the id keeps the old URL on the row
+        // for debugging. The only cost is that Retry on that row now fails URL parsing, which it
+        // would anyway: GitHub no longer serves it there.
+        await tx
           .update(repositories)
           .set({
             url: `${meta.html_url}#stale-${urlRow.githubId.toString()}`,
             updatedAt: new Date(),
           })
           .where(eq(repositories.id, urlRow.id));
+        return null;
+      });
+
+      if (urlRowResolution) {
+        existing = urlRowResolution;
       }
     }
 

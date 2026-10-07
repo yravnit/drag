@@ -284,6 +284,56 @@ describe("consumeCounter", () => {
     expect(statements[0].setWhereParams).toContain(7);
     expect(statements[0].setWhereSql).toContain('"rate_limits"."count" <');
   });
+
+  it("rejects a zero limit without creating a counter", async () => {
+    const { db, store, statements } = createStubDb();
+
+    const result = await consumeCounter(db, {
+      userId: "user-1",
+      // An Enterprise account negotiated to zero queries per month.
+      action: "rag-monthly-quota",
+      maxRequests: 0,
+      windowStart: new Date(),
+      windowEnd: new Date(Date.now() + 60000),
+    });
+
+    // The INSERT has no guard and the expired-window branch of the DO UPDATE guard passes whatever
+    // the cap is, so either path would return a row and be read as `allowed: true`. That granted one
+    // free query per month to a zero-query account.
+    expect(result.allowed).toBe(false);
+    expect(result.count).toBe(0);
+    expect(statements).toHaveLength(0);
+    expect(store.size).toBe(0);
+  });
+
+  it("rejects a zero limit again once the previous window has expired", async () => {
+    const past = new Date(Date.now() - 5000);
+    const now = new Date();
+    const { db, store } = createStubDb({
+      "user-1:rag-monthly-quota": {
+        userId: "user-1",
+        action: "rag-monthly-quota",
+        count: 3,
+        windowStart: new Date(Date.now() - 65000),
+        windowEnd: past,
+        updatedAt: past,
+      },
+    });
+
+    const result = await consumeCounter(db, {
+      userId: "user-1",
+      action: "rag-monthly-quota",
+      maxRequests: 0,
+      windowStart: now,
+      windowEnd: new Date(now.getTime() + 60000),
+      now,
+    });
+
+    // A new month resets the counter to 1 and returns a row, which is the same free query all over
+    // again. The guard's expired branch short-circuits `count < maxRequests` entirely.
+    expect(result.allowed).toBe(false);
+    expect(store.get("user-1:rag-monthly-quota").count).toBe(3);
+  });
 });
 
 describe("checkRateLimit", () => {

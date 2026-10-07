@@ -91,6 +91,29 @@ let mockAssociationExists = false;
 /** Whether the existing repository has chunks still awaiting an embedding. */
 let mockPendingChunks = false;
 
+/**
+ * Thenable read stage that stays chainable, so `.where(...).limit(1).for("update")` composes the way
+ * the route composes it. `all` is the bare read (the repository count), `limited` the `.limit(1)`
+ * existence probe; a row lock reads the same set as the bare read.
+ */
+function readStage(
+  rows: any[],
+  stages: { all: () => any[]; limited: () => any[] },
+  locks: string[] = [],
+): any {
+  const stage = (resolved: any[]) =>
+    Object.assign(Promise.resolve(resolved), {
+      where: vi.fn(() => stage(stages.all())),
+      limit: vi.fn(() => stage(stages.limited())),
+      for: vi.fn((strength: string) => {
+        locks.push(strength);
+        return stage(stages.all());
+      }),
+      innerJoin: vi.fn(() => stage(stages.all())),
+    });
+  return stage(rows);
+}
+
 function createSelectChain() {
   return {
     from: vi.fn().mockImplementation((table: any) => {
@@ -109,27 +132,14 @@ function createSelectChain() {
         return mockUserRepos;
       };
 
-      // .limit(1) is an existence probe; the bare await is the count. Model them separately.
+      // .limit(1) is an existence probe; the bare await is the count.
       const getLimitedResult = () => {
         if (isChunks) return getResult();
         if (isRepositories || isUser) return getResult();
         return mockAssociationExists ? [{ repositoryId: "existing" }] : [];
       };
 
-      const whereFn = vi.fn().mockImplementation(() => {
-        return Object.assign(Promise.resolve(getResult()), {
-          limit: vi.fn().mockImplementation(() => Promise.resolve(getLimitedResult())),
-          for: vi.fn().mockImplementation(() => Promise.resolve(getResult())),
-        });
-      });
-
-      const chainObj: any = {
-        where: whereFn,
-        limit: vi.fn().mockImplementation(() => Promise.resolve(getLimitedResult())),
-        for: vi.fn().mockImplementation(() => Promise.resolve(getResult())),
-        innerJoin: vi.fn().mockImplementation(() => chainObj),
-      };
-      return chainObj;
+      return readStage(getResult(), { all: getResult, limited: getLimitedResult });
     }),
   };
 }
@@ -503,15 +513,7 @@ describe("POST /api/repos", () => {
         if (!isRepositories) return result;
         // github-id lookup misses; the URL lookup finds the old row.
         const row = urlLookups++ === 0 ? [] : [staleRow];
-        return {
-          ...result,
-          where: vi.fn().mockReturnValue(
-            Object.assign(Promise.resolve(row), {
-              limit: vi.fn().mockResolvedValue(row),
-              for: vi.fn().mockResolvedValue(row),
-            }),
-          ),
-        };
+        return { ...result, where: vi.fn(() => readStage(row, { all: () => row, limited: () => row })) };
       });
       return chain;
     });
@@ -550,6 +552,86 @@ describe("POST /api/repos", () => {
     expect(updates.some((u) => typeof u.url === "string" && u.url.includes("#stale-111"))).toBe(true);
   });
 
+  it("reuses a URL row that already carries this github_id instead of freeing it", async () => {
+    mockGetSession.mockResolvedValueOnce({ user: { "id": "user-2" } } as any);
+    mockGetAccessToken.mockResolvedValueOnce({ accessToken: "token-123" });
+    mockGetRepository.mockResolvedValueOnce({
+      id: 12345,
+      name: "shared",
+      owner: { login: "owner" },
+      html_url: "https://github.com/owner/shared",
+      default_branch: "main",
+      private: false,
+    });
+    mockGetCommit.mockResolvedValueOnce({ sha: "sha-123" });
+    mockGetTree.mockResolvedValueOnce({ tree: [{ type: "blob", size: 10 }], truncated: false });
+
+    // A concurrent request committed this repository's row between our github-id lookup and our
+    // URL fallback. It is this same repository, so it is shared, not recycled.
+    const concurrentRow = {
+      id: "concurrent-row-id",
+      githubId: BigInt(12345),
+      embeddingStatus: "ready",
+      name: "shared",
+      owner: "owner",
+      url: "https://github.com/owner/shared",
+      defaultBranch: "main",
+      isPrivate: false,
+    };
+
+    let repositoryLookups = 0;
+    const locks: string[] = [];
+    const updates: any[] = [];
+    mockDbSelect.mockImplementation(() => {
+      const chain = createSelectChain();
+      const originalFrom = chain.from;
+      chain.from = vi.fn().mockImplementation((table: any) => {
+        const result = originalFrom(table);
+        const isRepositories =
+          table?.githubId === "repositories_githubId" || table === "repositories";
+        if (!isRepositories) return result;
+        repositoryLookups++;
+        const row = repositoryLookups === 1 ? [] : [concurrentRow];
+        return { ...result, where: vi.fn(() => readStage(row, { all: () => row, limited: () => row }, locks)) };
+      });
+      return chain;
+    });
+
+    const inserted: any[] = [];
+    mockDbInsert.mockImplementation(() => ({
+      values: vi.fn().mockImplementation((val: any) => {
+        inserted.push(val);
+        return { returning: vi.fn().mockResolvedValue([{ id: "duplicate-row-id" }]) };
+      }),
+    }));
+
+    mockDbUpdate.mockImplementation(() => ({
+      set: (values: any) => {
+        updates.push(values);
+        return { where: vi.fn().mockResolvedValue(undefined) };
+      },
+    }));
+
+    const request = new Request("http://localhost/api/repos", {
+      method: "POST",
+      body: JSON.stringify({ url: "https://github.com/owner/shared" }),
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    expect(data.repositoryId).toBe("concurrent-row-id");
+    expect(data.alreadyExists).toBe(true);
+    // Rewriting the URL would have committed, then the insert would have failed on the unique
+    // github_id and 500ed the request with the URL still mangled.
+    expect(updates.some((u) => typeof u.url === "string")).toBe(false);
+    expect(inserted.some((v) => "githubId" in v)).toBe(false);
+    // The judgment reads the row under a lock, so a second concurrent add cannot free or adopt it
+    // between the read and the decision.
+    expect(locks).toContain("update");
+  });
+
   it("does not touch the URL row when it is a legacy row with a null github_id", async () => {
     mockGetSession.mockResolvedValueOnce({ user: { id: "user-1" } } as any);
     mockGetAccessToken.mockResolvedValueOnce({ accessToken: "token-123" });
@@ -584,15 +666,7 @@ describe("POST /api/repos", () => {
           table?.githubId === "repositories_githubId" || table === "repositories";
         if (!isRepositories) return result;
         const row = urlLookups++ === 0 ? [] : [legacy];
-        return {
-          ...result,
-          where: vi.fn().mockReturnValue(
-            Object.assign(Promise.resolve(row), {
-              limit: vi.fn().mockResolvedValue(row),
-              for: vi.fn().mockResolvedValue(row),
-            }),
-          ),
-        };
+        return { ...result, where: vi.fn(() => readStage(row, { all: () => row, limited: () => row })) };
       });
       return chain;
     });
@@ -659,15 +733,7 @@ describe("POST /api/repos", () => {
         // First repositories select is the github-id lookup, second is the URL fallback.
         repositoryLookups++;
         const row = repositoryLookups === 1 ? [] : [legacy];
-        return {
-          ...result,
-          where: vi.fn().mockReturnValue(
-            Object.assign(Promise.resolve(row), {
-              limit: vi.fn().mockResolvedValue(row),
-              for: vi.fn().mockResolvedValue(row),
-            }),
-          ),
-        };
+        return { ...result, where: vi.fn(() => readStage(row, { all: () => row, limited: () => row })) };
       });
       return chain;
     });

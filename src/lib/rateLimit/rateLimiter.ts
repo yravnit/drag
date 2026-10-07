@@ -59,6 +59,9 @@ export interface ConsumeCounterResult {
  * writes nothing and yields no row, which is exactly `allowed: false`. The stored count therefore
  * only ever counts consumed units — it never inflates on rejection, so `getPlanUsage` cannot read an
  * inflated number and `rollbackMonthlyQueryQuota`'s decrement always refunds a real consumption.
+ *
+ * A non-positive `maxRequests` is rejected before the statement, because it is the one cap no write
+ * path in it can express: the INSERT is unguarded and the guard's expired branch passes regardless.
  */
 export async function consumeCounter(
   client: DbOrTx,
@@ -66,6 +69,14 @@ export async function consumeCounter(
 ): Promise<ConsumeCounterResult> {
   const { userId, action, maxRequests, windowStart, windowEnd } = options;
   const now = options.now ?? new Date();
+
+  // A cap of zero allows nothing, and neither write path below would have said so: the INSERT is
+  // unguarded (it is the first request of the counter), and the guard's expired-window branch passes
+  // whatever `maxRequests` is. `allowed: true` on a returned row would therefore hand an Enterprise
+  // account with `custom_monthly_query_limit = 0` exactly one query per month. Reject before writing.
+  if (!(maxRequests > 0)) {
+    return { allowed: false, count: 0, windowEnd };
+  }
 
   // `window_end <= now` means the previous window is over, so this request starts a fresh one.
   // Unqualified column references inside ON CONFLICT DO UPDATE read the pre-update row, which is
