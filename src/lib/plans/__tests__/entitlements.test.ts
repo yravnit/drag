@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { user } from "@/db/schemas/auth";
 import { userRepositories } from "@/db/schemas/userRepositories";
 import { rateLimits } from "@/db/schemas/rateLimits";
@@ -24,6 +25,8 @@ import {
   getDefaultEntitlementsForPlan,
   PLAN_PRICING,
 } from "../planConfig";
+
+const dialect = new PgDialect();
 
 describe("Plan Entitlements Subsystem", () => {
   let mockDb: any;
@@ -70,18 +73,51 @@ describe("Plan Entitlements Subsystem", () => {
       insert: vi.fn().mockImplementation(() => {
         return {
           values: vi.fn().mockImplementation((val: any) => {
-            return Object.assign(
-              Promise.resolve().then(() => {
-                mockRateLimits = [val];
+            return {
+              // Mirrors the real atomic counter: `ON CONFLICT DO UPDATE ... RETURNING` evaluates
+              // against the stored row and hands back the post-update values.
+              onConflictDoUpdate: vi.fn().mockImplementation(({ set }: any) => {
+                return {
+                  returning: vi.fn().mockImplementation(async () => {
+                    // Read the cap out of the rendered statement so this mock cannot drift from
+                    // the SQL the implementation actually sends.
+                    const rendered = dialect.sqlToQuery(set.count);
+                    const cap = Number(rendered.params[rendered.params.length - 1]);
+
+                    const existing = mockRateLimits.find(
+                      (r) => r.userId === val.userId && r.action === val.action,
+                    );
+                    if (!existing) {
+                      mockRateLimits.push({ ...val });
+                      return [{ ...val, allowed: cap >= 1 }];
+                    }
+
+                    const expired = existing.windowEnd.getTime() <= val.updatedAt.getTime();
+                    const allowed = expired || existing.count < cap;
+                    const nextCount = expired
+                      ? 1
+                      : existing.count < cap
+                        ? existing.count + 1
+                        : existing.count;
+
+                    Object.assign(existing, {
+                      count: nextCount,
+                      windowStart: expired ? val.windowStart : existing.windowStart,
+                      windowEnd: expired ? val.windowEnd : existing.windowEnd,
+                      updatedAt: val.updatedAt,
+                    });
+
+                    return [
+                      {
+                        count: existing.count,
+                        windowEnd: existing.windowEnd,
+                        allowed,
+                      },
+                    ];
+                  }),
+                };
               }),
-              {
-                onConflictDoUpdate: vi.fn().mockImplementation(() => {
-                  mockRateLimits = [val];
-                  return Promise.resolve();
-                }),
-                returning: vi.fn().mockResolvedValue([val]),
-              },
-            );
+            };
           }),
         };
       }),
@@ -355,7 +391,9 @@ describe("Plan Entitlements Subsystem", () => {
       expect(quota.allowed).toBe(true);
       expect(quota.count).toBe(25);
       expect(quota.limit).toBe(25);
-      expect(mockDb.update).toHaveBeenCalled();
+      // The count moves through the atomic upsert, not a follow-up UPDATE.
+      expect(mockDb.update).not.toHaveBeenCalled();
+      expect(mockRateLimits[0].count).toBe(25);
     });
 
     it("resets quota count when entering a new calendar month", async () => {
@@ -433,10 +471,14 @@ describe("Plan Entitlements Subsystem", () => {
   });
 
   describe("Concurrency & Race Condition Safety", () => {
-    it("uses database transactions with SELECT ... FOR UPDATE for atomic quota checks", async () => {
+    it("consumes quota with a single atomic upsert and no prior row read", async () => {
       const now = new Date("2026-09-15T12:00:00Z");
       await checkAndConsumeMonthlyQueryQuota(mockDb, "user-concurrent", 25, now);
       expect(mockDb.transaction).toHaveBeenCalled();
+      // A read-then-write is what lost the race on a user's first request: SELECT ... FOR UPDATE
+      // locks nothing when the counter row does not exist, and every conflicting insert reset the
+      // count to 1. The counter is now created and incremented in one statement.
+      expect(mockDb.insert).toHaveBeenCalled();
     });
 
     it("uses database transactions with row-level locks for repository creation checks", async () => {
@@ -465,58 +507,50 @@ describe("Plan Entitlements Subsystem", () => {
       const now = new Date("2026-09-15T12:00:00Z");
       const { windowStart, windowEnd } = getCalendarMonthWindow(now);
 
-      let sharedCount = 24;
-      let lock = Promise.resolve();
-      mockDb.transaction = vi.fn((cb: any) => {
-        const nextLock = lock.then(async () => {
-          const currentCount = sharedCount;
-          const txClient = {
-            select: vi.fn().mockReturnValue({
-              from: vi.fn().mockReturnValue({
-                where: vi.fn().mockReturnValue({
-                  for: vi.fn().mockResolvedValue([
-                    {
-                      userId: "user-race",
-                      action: RAG_MONTHLY_QUOTA_ACTION,
-                      count: currentCount,
-                      windowStart,
-                      windowEnd,
-                    },
-                  ]),
-                }),
-              }),
-            }),
-            update: vi.fn().mockReturnValue({
-              set: vi.fn().mockImplementation((u: any) => {
-                sharedCount = u.count;
-                return {
-                  where: vi.fn().mockResolvedValue(undefined),
-                };
-              }),
-            }),
-            insert: vi.fn(),
-          };
-          return cb(txClient);
-        });
-        lock = nextLock.catch(() => {});
-        return nextLock;
-      });
+      // One shared counter row, so each statement sees the previous one's committed result.
+      mockRateLimits = [
+        {
+          userId: "user-race",
+          action: RAG_MONTHLY_QUOTA_ACTION,
+          count: 24,
+          windowStart,
+          windowEnd,
+          updatedAt: now,
+        },
+      ];
 
       // 3 concurrent requests fired simultaneously when count is 24 and limit is 25
-      const [req1, req2, req3] = await Promise.all([
+      const results = await Promise.all([
         checkAndConsumeMonthlyQueryQuota(mockDb, "user-race", 25, now),
         checkAndConsumeMonthlyQueryQuota(mockDb, "user-race", 25, now),
         checkAndConsumeMonthlyQueryQuota(mockDb, "user-race", 25, now),
       ]);
 
-      const allowedResults = [req1.allowed, req2.allowed, req3.allowed];
-      const successCount = allowedResults.filter((a) => a === true).length;
-      const rejectedCount = allowedResults.filter((a) => a === false).length;
+      const allowed = results.filter((r) => r.allowed).length;
+      const rejected = results.filter((r) => !r.allowed).length;
 
-      // Exactly 1 allowed to hit 25, and the other 2 rejected
-      expect(successCount).toBe(1);
-      expect(rejectedCount).toBe(2);
-      expect(sharedCount).toBe(25);
+      // Exactly 1 allowed to reach 25; the other 2 are rejected without inflating usage.
+      expect(allowed).toBe(1);
+      expect(rejected).toBe(2);
+      expect(mockRateLimits[0].count).toBe(25);
+    });
+
+    it("counts every concurrent first request of the month, none reset to 1", async () => {
+      const now = new Date("2026-09-15T12:00:00Z");
+      mockRateLimits = [];
+
+      // 5 concurrent first requests. The old read-then-write let all 5 see "no row" and each
+      // conflicting insert wrote count = 1, so all 5 were allowed on a 3-query quota.
+      const results = await Promise.all(
+        Array.from({ length: 5 }, () =>
+          checkAndConsumeMonthlyQueryQuota(mockDb, "user-cold-start", 3, now),
+        ),
+      );
+
+      expect(results.filter((r) => r.allowed).length).toBe(3);
+      expect(results.filter((r) => !r.allowed).length).toBe(2);
+      expect(mockRateLimits).toHaveLength(1);
+      expect(mockRateLimits[0].count).toBe(3);
     });
   });
 

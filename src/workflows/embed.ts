@@ -128,6 +128,7 @@ async function runEmbedBatchStep(repositoryId: string) {
 
 import {
   claimEmbeddingLease,
+  renewEmbeddingLease,
   finalizeEmbedding,
   clearEmbeddingLease,
 } from "@/lib/leases/repositoryLeases";
@@ -137,14 +138,19 @@ async function claimEmbeddingLeaseStep(repositoryId: string) {
   return claimEmbeddingLease(db, repositoryId);
 }
 
-async function clearEmbeddingLeaseStep(repositoryId: string) {
+async function renewEmbeddingLeaseStep(repositoryId: string, claimId: string) {
   "use step";
-  return clearEmbeddingLease(db, repositoryId);
+  return renewEmbeddingLease(db, repositoryId, claimId);
 }
 
-async function finalizeEmbeddingStep(repositoryId: string, status: "ready" | "failed") {
+async function clearEmbeddingLeaseStep(repositoryId: string, claimId: string) {
   "use step";
-  return finalizeEmbedding(db, repositoryId, status);
+  return clearEmbeddingLease(db, repositoryId, claimId);
+}
+
+async function finalizeEmbeddingStep(repositoryId: string, status: "ready" | "failed", claimId: string) {
+  "use step";
+  return finalizeEmbedding(db, repositoryId, status, claimId);
 }
 
 export async function embedRepository(payload: EmbedPayload): Promise<EmbedResult> {
@@ -162,12 +168,24 @@ export async function embedRepository(payload: EmbedPayload): Promise<EmbedResul
     };
   }
 
+  const claimId = claim.claimId;
   let totalEmbedded = 0;
   let hasMore = true;
   let batchCount = 0;
 
   try {
     while (hasMore && batchCount < MAX_BATCHES_PER_RUN) {
+      // Renew before each batch. Provider pacing alone can run longer than the lease, and an
+      // expired lease lets another worker claim the run; renew first so that never happens.
+      const stillOwned = await renewEmbeddingLeaseStep(payload.repositoryId, claimId);
+      if (!stillOwned) {
+        // The lease was taken over. Stop writing; whoever holds the claim now owns this state.
+        return {
+          success: true,
+          totalEmbedded,
+        };
+      }
+
       const stepResult = await runEmbedBatchStep(payload.repositoryId);
       totalEmbedded += stepResult.embeddedCount;
       hasMore = stepResult.hasMore;
@@ -176,9 +194,9 @@ export async function embedRepository(payload: EmbedPayload): Promise<EmbedResul
 
     if (hasMore) {
       // More chunks remain: release lease so next cron cycle continues, do NOT mark ready
-      await clearEmbeddingLeaseStep(payload.repositoryId);
+      await clearEmbeddingLeaseStep(payload.repositoryId, claimId);
     } else {
-      await finalizeEmbeddingStep(payload.repositoryId, "ready");
+      await finalizeEmbeddingStep(payload.repositoryId, "ready", claimId);
     }
 
     return {
@@ -186,7 +204,7 @@ export async function embedRepository(payload: EmbedPayload): Promise<EmbedResul
       totalEmbedded,
     };
   } catch (error) {
-    await finalizeEmbeddingStep(payload.repositoryId, "failed");
+    await finalizeEmbeddingStep(payload.repositoryId, "failed", claimId);
     throw error;
   }
 }

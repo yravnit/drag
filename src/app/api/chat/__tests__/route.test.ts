@@ -16,8 +16,11 @@ const mockCheckRateLimit = vi.fn().mockResolvedValue({
   remaining: 29,
   resetAt: Date.now() + 60000,
 });
+const mockConsumeCounter = vi.fn();
 vi.mock("@/lib/rateLimit/rateLimiter", () => ({
   checkRateLimit: (...args: any[]) => mockCheckRateLimit(...args),
+  // checkAndConsumeMonthlyQueryQuota routes its monthly count through the same atomic upsert.
+  consumeCounter: (...args: any[]) => mockConsumeCounter(...args),
 }));
 
 vi.mock("@/db/db", () => ({
@@ -83,6 +86,11 @@ describe("POST /api/chat", () => {
       allowed: true,
       remaining: 29,
       resetAt: Date.now() + 60000,
+    });
+    mockConsumeCounter.mockResolvedValue({
+      allowed: true,
+      count: 1,
+      windowEnd: new Date(Date.now() + 60000),
     });
   });
 

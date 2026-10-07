@@ -23,6 +23,12 @@ const mockCheckRateLimit = vi.fn().mockResolvedValue({
 });
 vi.mock("@/lib/rateLimit/rateLimiter", () => ({
   checkRateLimit: (...args: any[]) => mockCheckRateLimit(...args),
+  // The monthly quota routes through the same atomic counter.
+  consumeCounter: async () => ({
+    allowed: true,
+    count: 1,
+    windowEnd: new Date(Date.now() + 60000),
+  }),
 }));
 
 const mockDbSelect = vi.fn();

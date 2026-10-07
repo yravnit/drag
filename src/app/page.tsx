@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { signIn, signOut, useSession } from "@/lib/auth/client";
 import { FolderGit2, Loader2, Globe, Lock } from "lucide-react";
 import { GITHUB_ACCESS_SCOPES, type GitHubAccessMode } from "@/lib/auth/accessMode";
@@ -99,6 +99,12 @@ export default function Home() {
   const [selectedModel, setSelectedModel] = useState<string>("default");
   const [responseMode, setResponseMode] = useState<ResponseMode>("precise");
 
+  // Monotonic request ids. Selecting a repository or thread while a slower request for the
+  // previous one is still in flight used to let the late response overwrite the current view,
+  // putting thread A's answer and citations under thread B.
+  const requestIdRef = useRef(0);
+  const nextRequestId = useCallback(() => ++requestIdRef.current, []);
+
   // Network Fetchers
   const loadUserRepos = useCallback(async () => {
     setReposLoading(true);
@@ -120,45 +126,54 @@ export default function Home() {
     }
   }, []);
 
-  const loadConversations = useCallback(async (repoId: string) => {
-    setConvsLoading(true);
-    setConvsError(null);
-    try {
-      const res = await fetch(`/api/conversations?repositoryId=${repoId}`);
-      if (res.ok) {
-        const data = await res.json();
-        setConversationsList(data);
-      } else {
-        const data = await res.json();
-        setConvsError(data.error || "Failed to load conversations");
+  const loadConversations = useCallback(
+    async (repoId: string, requestId = nextRequestId()) => {
+      setConvsLoading(true);
+      setConvsError(null);
+      try {
+        const res = await fetch(`/api/conversations?repositoryId=${repoId}`);
+        const data = res.ok ? await res.json() : await res.json();
+        // A newer selection has taken over; this response describes a repository no longer shown.
+        if (requestId !== requestIdRef.current) return;
+        if (res.ok) {
+          setConversationsList(data);
+        } else {
+          setConvsError(data.error || "Failed to load conversations");
+        }
+      } catch (err) {
+        if (requestId !== requestIdRef.current) return;
+        console.error("Failed to load conversations:", err);
+        setConvsError("Network error while loading conversations");
+      } finally {
+        if (requestId === requestIdRef.current) setConvsLoading(false);
       }
-    } catch (err) {
-      console.error("Failed to load conversations:", err);
-      setConvsError("Network error while loading conversations");
-    } finally {
-      setConvsLoading(false);
-    }
-  }, []);
+    },
+    [nextRequestId],
+  );
 
-  const loadMessages = useCallback(async (convId: string) => {
-    setMessagesLoading(true);
-    setMessagesError(null);
-    try {
-      const res = await fetch(`/api/conversations/${convId}/messages`);
-      if (res.ok) {
+  const loadMessages = useCallback(
+    async (convId: string, requestId = nextRequestId()) => {
+      setMessagesLoading(true);
+      setMessagesError(null);
+      try {
+        const res = await fetch(`/api/conversations/${convId}/messages`);
         const data = await res.json();
-        setMessagesList(data);
-      } else {
-        const data = await res.json();
-        setMessagesError(data.error || "Failed to load messages");
+        if (requestId !== requestIdRef.current) return;
+        if (res.ok) {
+          setMessagesList(data);
+        } else {
+          setMessagesError(data.error || "Failed to load messages");
+        }
+      } catch (err) {
+        if (requestId !== requestIdRef.current) return;
+        console.error("Failed to load messages:", err);
+        setMessagesError("Network error while loading messages");
+      } finally {
+        if (requestId === requestIdRef.current) setMessagesLoading(false);
       }
-    } catch (err) {
-      console.error("Failed to load messages:", err);
-      setMessagesError("Network error while loading messages");
-    } finally {
-      setMessagesLoading(false);
-    }
-  }, []);
+    },
+    [nextRequestId],
+  );
 
   const loadGithubRepos = useCallback(async (page = 1) => {
     setGithubLoading(true);
@@ -202,8 +217,9 @@ export default function Home() {
 
   // Load conversations when selected repository changes
   useEffect(() => {
+    const requestId = nextRequestId();
     if (selectedRepo) {
-      loadConversations(selectedRepo.id);
+      loadConversations(selectedRepo.id, requestId);
       setSelectedConversation(null);
       setMessagesList([]);
       setStatusTracker({
@@ -221,62 +237,78 @@ export default function Home() {
       setMessagesList([]);
       setStatusTracker(null);
     }
-  }, [selectedRepo, loadConversations]);
+  }, [selectedRepo, loadConversations, nextRequestId]);
 
-  // Polling logic for repository ingestion/embedding status
+  /**
+   * Fetch status once for the selected repository, then poll only while indexing is still active.
+   * A ready repository never had its status fetched at all, so storage, file/chunk counts and the
+   * commit SHA stayed empty after a reload: `/api/repos` does not return them.
+   */
+  // Derived so the effect below depends on primitives: the response replaces the whole tracker,
+  // so depending on the object itself would tear down and restart the poll on every response.
+  const trackedRepoId = statusTracker?.id ?? null;
+  const trackedStatus = statusTracker?.embeddingStatus ?? null;
+
   useEffect(() => {
-    if (
-      !statusTracker ||
-      statusTracker.embeddingStatus === "ready" ||
-      statusTracker.embeddingStatus === "failed"
-    ) {
-      return;
-    }
+    if (!trackedRepoId) return;
 
-    const interval = setInterval(async () => {
+    let cancelled = false;
+    const repoId = trackedRepoId;
+
+    const applyStatus = (data: StatusTracker) => {
+      if (cancelled) return;
+      setStatusTracker((prev) => (prev && prev.id === repoId ? data : prev));
+      setRepositoriesList((prev) =>
+        prev.map((r) =>
+          r.id === repoId
+            ? {
+                ...r,
+                embeddingStatus: data.embeddingStatus,
+                indexedAt: data.indexedAt,
+                filesIndexed: data.filesIndexed,
+                chunksCount: data.chunksCount,
+                defaultBranch: data.defaultBranch ?? r.defaultBranch,
+                primaryLanguage: data.primaryLanguage ?? r.primaryLanguage,
+                headCommitSha: data.headCommitSha ?? r.headCommitSha,
+                totalSizeBytes: data.totalSizeBytes ?? r.totalSizeBytes,
+              }
+            : r,
+        ),
+      );
+    };
+
+    const fetchStatus = async () => {
       try {
-        const res = await fetch(`/api/repos/${statusTracker.id}/status`);
-        if (res.ok) {
-          const data = await res.json();
-          setStatusTracker(data);
-
-          // Update in main list as well
-          setRepositoriesList((prev) =>
-            prev.map((r) =>
-              r.id === statusTracker.id
-                ? {
-                    ...r,
-                    embeddingStatus: data.embeddingStatus,
-                    indexedAt: data.indexedAt,
-                    filesIndexed: data.filesIndexed,
-                    chunksCount: data.chunksCount,
-                    defaultBranch: data.defaultBranch ?? r.defaultBranch,
-                    primaryLanguage: data.primaryLanguage ?? r.primaryLanguage,
-                  }
-                : r,
-            ),
-          );
-
-          if (data.embeddingStatus === "ready" || data.embeddingStatus === "failed") {
-            clearInterval(interval);
-          }
-        }
+        const res = await fetch(`/api/repos/${repoId}/status`);
+        if (res.ok) applyStatus(await res.json());
       } catch (err) {
-        console.error("Error polling repository status:", err);
+        console.error("Error fetching repository status:", err);
       }
-    }, 2000);
+    };
 
-    return () => clearInterval(interval);
-  }, [statusTracker]);
+    fetchStatus();
 
-  // Load messages when selected conversation changes
+    // Poll only while work is outstanding; a terminal status has nothing left to watch.
+    const isActive = trackedStatus !== "ready" && trackedStatus !== "failed";
+    if (!isActive) return () => { cancelled = true; };
+
+    const interval = setInterval(fetchStatus, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [trackedRepoId, trackedStatus]);
+
+  // Load messages when selected conversation changes. Switching threads invalidates any in-flight
+  // message request for the thread being left.
   useEffect(() => {
+    const requestId = nextRequestId();
     if (selectedConversation) {
-      loadMessages(selectedConversation.id);
+      loadMessages(selectedConversation.id, requestId);
     } else {
       setMessagesList([]);
     }
-  }, [selectedConversation, loadMessages]);
+  }, [selectedConversation, loadMessages, nextRequestId]);
 
   // Triggered when modal opens
   useEffect(() => {
@@ -349,7 +381,9 @@ export default function Home() {
       const res = await fetch("/api/repos", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: repo.url }),
+        // The indexed branch must travel with the retry. Without it the server defaults to `main`,
+        // and a repository indexed on `staging` is rejected with 409 because the row is shared.
+        body: JSON.stringify({ url: repo.url, branch: repo.defaultBranch }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -449,6 +483,10 @@ export default function Home() {
     if (!selectedConversation || !messageText.trim() || isStreaming) return;
 
     const userText = messageText;
+    // Captured so the stream and its completion reload stay bound to this thread, even if the user
+    // switches conversations while the response is still arriving.
+    const conversationId = selectedConversation.id;
+    const requestId = nextRequestId();
     setMessageText("");
     setChatError("");
     setIsStreaming(true);
@@ -476,7 +514,7 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          conversationId: selectedConversation.id,
+          conversationId,
           message: userText,
           model: selectedModel !== "default" ? selectedModel : undefined,
           responseMode,
@@ -495,13 +533,19 @@ export default function Home() {
           : (data.error || "Generation failed");
 
         setChatError(displayErr);
-        setMessagesList((prev) =>
-          prev.map((msg) =>
-            msg.id === tempAssistantId
-              ? { ...msg, status: "failed", content: displayErr }
-              : msg,
-          ),
-        );
+        // Reload from the server instead of leaving a local temp bubble behind. A temp id is not a
+        // UUID, so retrying it later would send an unparseable value as retryMessageId and fail
+        // before generation ever starts.
+        if (requestId === requestIdRef.current) {
+          setMessagesList((prev) =>
+            prev.map((msg) =>
+              msg.id === tempAssistantId
+                ? { ...msg, status: "failed", content: displayErr }
+                : msg,
+            ),
+          );
+          await loadMessages(conversationId, requestId);
+        }
         setIsStreaming(false);
         return;
       }
@@ -521,6 +565,7 @@ export default function Home() {
         const textChunk = decoder.decode(value, { stream: true });
         streamText += textChunk;
 
+        if (requestId !== requestIdRef.current) continue;
         setMessagesList((prev) =>
           prev.map((msg) =>
             msg.id === tempAssistantId ? { ...msg, content: streamText } : msg,
@@ -528,11 +573,13 @@ export default function Home() {
         );
       }
 
-      await loadMessages(selectedConversation.id);
+      // Reload the thread this stream belongs to, not whichever one is displayed now.
+      await loadMessages(conversationId, requestId);
       loadPlanUsage();
     } catch (err) {
       const message = err instanceof Error ? err.message : "";
       console.error("Chat error:", err);
+      if (requestId !== requestIdRef.current) return;
       setChatError(message || "An unexpected error occurred");
       setMessagesList((prev) =>
         prev.map((msg) =>
@@ -565,6 +612,13 @@ export default function Home() {
 
     if (!promptToRetry) return;
 
+    // A local temp id was never persisted, so the server has nothing to delete and the UUID column
+    // rejects it outright. Retry those without an id; the server keeps its failed turn as history
+    // and the reload below replaces the local bubble with the saved rows.
+    const isSavedMessage = !failedMsg.id.startsWith("temp-");
+    const conversationId = selectedConversation.id;
+    const requestId = nextRequestId();
+
     setIsStreaming(true);
     setChatError("");
     setMessagesList((prev) =>
@@ -580,10 +634,10 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          conversationId: selectedConversation.id,
+          conversationId,
           message: promptToRetry,
           isRetry: true,
-          retryMessageId: failedMsg.id,
+          retryMessageId: isSavedMessage ? failedMsg.id : undefined,
           model: selectedModel !== "default" ? selectedModel : undefined,
           responseMode,
         }),
@@ -601,6 +655,7 @@ export default function Home() {
           : (data.error || "Generation retry failed");
 
         setChatError(errText);
+        if (requestId !== requestIdRef.current) return;
         setMessagesList((prev) =>
           prev.map((msg) =>
             msg.id === failedMsg.id
@@ -625,6 +680,7 @@ export default function Home() {
         const textChunk = decoder.decode(value, { stream: true });
         streamText += textChunk;
 
+        if (requestId !== requestIdRef.current) continue;
         setMessagesList((prev) =>
           prev.map((msg) =>
             msg.id === failedMsg.id ? { ...msg, content: streamText } : msg,
@@ -632,11 +688,12 @@ export default function Home() {
         );
       }
 
-      await loadMessages(selectedConversation.id);
+      await loadMessages(conversationId, requestId);
       loadPlanUsage();
     } catch (err) {
       const message = err instanceof Error ? err.message : "";
       console.error("Chat retry error:", err);
+      if (requestId !== requestIdRef.current) return;
       setChatError(message || "An unexpected error occurred during retry");
       setMessagesList((prev) =>
         prev.map((msg) =>

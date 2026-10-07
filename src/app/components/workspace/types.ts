@@ -30,6 +30,8 @@ export interface WorkspaceRepository {
   totalSizeBytes?: number | null;
   embeddingProvider?: string | null;
   embeddingModel?: string | null;
+  /** Only populated by `/api/repos/[id]/status`; the list endpoint does not return it. */
+  headCommitSha?: string | null;
 }
 
 /** Ingestion and embedding status tracker for selected repository. */

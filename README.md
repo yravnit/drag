@@ -21,22 +21,28 @@ Answers include bracket citations that link directly to code lines, complete wit
       │
       ├──> [Vercel Workflow Engine]
       │         ├── ingestRepository (Tarball stream -> Tree-sitter -> Chunks)
-      │         ├── embedRepository (NIM 768-dim embeddings -> Postgres)
+      │         ├── embedRepository (Gemini or Cloudflare, 768-dim -> Postgres)
       │         └── syncRepositories (Commit hash diffing & 24h cron)
       │
       └──> [RAG Chat Pipeline]
-                ├── Query Embedding (NVIDIA NIM)
-                ├── Hybrid Search (pgvector cosine + Postgres tsvector)
+                ├── Query Embedding (Gemini for public, Cloudflare for private)
+                ├── Hybrid Search (pgvector cosine + Postgres full-text)
                 ├── Reciprocal Rank Fusion (RRF k=60)
-                ├── Overlap Deduplication & Token Budgeting (4000 tokens)
-                └── Streaming Chat Completion (NIM minimax-m3)
+                ├── Overlap Deduplication & Character Budgeting (24000 chars)
+                └── Streaming Chat Completion (NVIDIA NIM)
 ```
+
+Embedding provider is chosen server-side from verified repository visibility: **Gemini**
+(`gemini-embedding-2`, 768 dims) for public repositories, **Cloudflare Workers AI**
+(`@cf/qwen/qwen3-embedding-0.6b`, 768 dims) for private ones. There is no fallback between
+them — a private repository that cannot reach Cloudflare fails rather than sending source to
+Gemini.
 
 ---
 
 ## Key technical features
 
-- **Resilient repository acquisition.** Streams tarball archives directly to tar extraction without buffering full archives in memory. Bounded by size limits (max 5,000 files, max 250 MB).
+- **Resilient repository acquisition.** Streams tarball archives directly to tar extraction without buffering full archives in memory. File count, repository size, and branch are bounded by the caller's plan (Free: 2,500 files / 50 MB / `main` only; Hobby: 12,500 files / 250 MB; Enterprise: 50,000 files / 1 GB; BOSS: unlimited).
 - **Tree-sitter AST parsing.** Extracts symbols, classes, functions, and semantic blocks across 13 programming languages with LRU parser caching.
 - **Incremental sync.** Tracks per-file SHA-256 content hashes. Incremental updates only re-parse and re-embed files that changed in git commits.
 - **Distributed lease claiming.** Sync and embedding workflows use Postgres transactions with `FOR UPDATE SKIP LOCKED` and 10-minute lease timeouts. Prevents duplicate work across serverless runs.
@@ -72,7 +78,9 @@ Permissions are verified directly against the user's OAuth account record in Pos
 - Node.js 20 or higher
 - PostgreSQL instance with `pgvector` enabled (such as Neon)
 - GitHub OAuth application credentials
-- NVIDIA NIM API key (from https://integrate.api.nvidia.com)
+- NVIDIA NIM API key (from https://integrate.api.nvidia.com) — chat completions
+- Google Gemini API key — embeddings for **public** repositories
+- Cloudflare Workers AI API token and account ID — embeddings for **private** repositories
 
 ---
 
@@ -101,8 +109,15 @@ Fill in the required values in `.env.local`:
 | `BETTER_AUTH_URL` | Application base URL (`http://localhost:3000` for local dev) |
 | `GITHUB_CLIENT_ID` | GitHub OAuth client ID |
 | `GITHUB_CLIENT_SECRET` | GitHub OAuth client secret |
-| `NVIDIA_API_KEY` | NVIDIA NIM API key for embeddings and LLM streaming |
+| `NVIDIA_API_KEY` | NVIDIA NIM API key for chat completions and weekly model discovery |
+| `GEMINI_API_KEY` | Google Gemini API key. Required to index **public** repositories. |
+| `CLOUDFLARE_API_TOKEN` | Cloudflare Workers AI API token. Required to index **private** repositories. |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account ID, used with the Workers AI token. |
 | `CRON_SECRET` | Secret token to authorize cron routes (optional in development) |
+
+`GEMINI_API_KEY` and the two `CLOUDFLARE_*` values are not interchangeable. A deployment missing
+`GEMINI_API_KEY` cannot index public repositories at all; a deployment missing the Cloudflare
+values cannot index private repositories, and DRAG will not fall back to Gemini for them.
 
 3. Set up the database schema:
 
@@ -167,5 +182,6 @@ npm run build
 1. **Single-repository chat scope.** Chat sessions query one repository at a time. Cross-repository queries across separate projects are not supported.
 2. **GitHub OAuth app scope.** DRAG uses standard OAuth apps with user consent (either Public-only or Full access). Fine-grained GitHub App bot installations are not currently used.
 3. **Repository access-cache policy.** GitHub permissions are cached for one hour to prevent hitting GitHub API rate limits. If access is revoked on GitHub, access in DRAG revokes after the cache entry expires or when the user deletes the repository from their workspace.
-4. **Repository size constraints.** Repositories larger than 5,000 files or 250 MB are rejected during addition to prevent serverless function memory exhaustion.
-5. **Provider dependency.** Embeddings use NVIDIA NIM `llama-nemotron-embed-1b-v2` (768 dimensions), and completions use `minimax-m3`. Self-hosted NIM containers can be configured by updating `EMBEDDING_BASE_URL` and `LLM_BASE_URL`.
+4. **Repository size constraints.** Repository size, file count, and branch are limited per plan and enforced server-side before ingestion, so the limits scale with the account rather than being fixed at 5,000 files / 250 MB.
+5. **Split embedding providers.** Embeddings are privacy-routed: Gemini `gemini-embedding-2` for public repositories and Cloudflare Workers AI `@cf/qwen/qwen3-embedding-0.6b` for private ones, both at 768 dimensions. Completions use NVIDIA NIM. There is no cross-provider fallback, so a missing or rate-limited key for one visibility class fails indexing for that class rather than degrading. Chat completions remain pinned to NVIDIA; `LLM_BASE_URL` can point at a self-hosted NIM container, but the embedding base URL is not configurable.
+6. **Benchmark scope.** `npm run eval:e2e` generates answers deterministically from retrieved chunks, so it measures retrieval quality and evaluator agreement only. It does not exercise the chat system prompt or the LLM; those need a live-model run.

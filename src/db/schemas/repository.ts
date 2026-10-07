@@ -19,6 +19,9 @@ export const repositories = snakeCase.table(
     indexedAt: timestamp({ withTimezone: true }),
     embeddingStatus: text(),
     embeddingLeaseExpiresAt: timestamp({ withTimezone: true }),
+    // Identifies the worker holding the embedding lease. A run can outlive the 10-minute lease,
+    // so final writes require a matching claim id instead of trusting the lease alone.
+    embeddingClaimId: text("embedding_claim_id"),
     nextSyncAt: timestamp({ withTimezone: true }),
     syncStatus: text(),
     syncLeaseExpiresAt: timestamp({ withTimezone: true }),

@@ -55,7 +55,6 @@ export function MermaidBlock({ chart, id }: MermaidBlockProps) {
 
   useEffect(() => {
     let active = true;
-    setSvg("");
     setError("");
     import("mermaid")
       .then((m) => {

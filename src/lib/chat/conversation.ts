@@ -148,11 +148,21 @@ export async function answerConversation(
       .returning();
   }
 
-  // If retrying, remove the previous failed assistant message if supplied
+  // If retrying, remove the previous failed assistant message if supplied.
+  // The id is client-supplied, so the delete is scoped to this conversation, the assistant
+  // role, and the failed status. Filtering on `messages.id` alone would let any authenticated
+  // user delete another conversation's message by guessing or leaking its id.
   if (input.isRetry && input.retryMessageId) {
     await deps.database
       .delete(messages)
-      .where(eq(messages.id, input.retryMessageId));
+      .where(
+        and(
+          eq(messages.id, input.retryMessageId),
+          eq(messages.conversationId, conversationId),
+          eq(messages.role, "assistant"),
+          eq(messages.status, "failed"),
+        ),
+      );
   }
 
   // 5. Insert Assistant Message with status "streaming"

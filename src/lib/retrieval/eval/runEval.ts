@@ -1,6 +1,7 @@
 import { RETRIEVAL_EVAL_DATASET } from "./dataset";
 import { evaluateRetrieval, formatEvalReport, type EvalMetrics } from "./evaluator";
 import { buildBenchmarkCorpus, computeDeterministicEmbedding, type BenchmarkChunk } from "./benchmarkCorpus";
+import { fuseHybridResults } from "../fusion";
 import type { RetrievedChunk } from "../retriever";
 
 export interface RegressionThresholds {
@@ -48,7 +49,23 @@ export function searchVectorBaseline(
 }
 
 /**
+ * Lexical tier weights, mirroring the `CASE` expression in `retrieveChunksLexical`.
+ *
+ * Production picks exactly one tier per chunk; the previous benchmark added path and per-term text
+ * scores on top of the symbol score, so it ranked differently from what production serves and
+ * could not detect a regression in the real query.
+ */
+export const LEXICAL_TIER = {
+  exactSymbol: 10.0,
+  symbolTerm: 6.0,
+  symbolPartial: 3.0,
+  path: 2.0,
+  text: 1.0,
+} as const;
+
+/**
  * Pure lexical retrieval against benchmark corpus.
+ * Returns the same single-tier score production SQL assigns.
  */
 export function searchLexicalBaseline(
   corpus: BenchmarkChunk[],
@@ -68,30 +85,22 @@ export function searchLexicalBaseline(
   const scored: Array<{ chunk: BenchmarkChunk; score: number }> = [];
 
   for (const chunk of corpus) {
-    let score = 0;
     const lowerSymbol = (chunk.symbolName || "").toLowerCase();
     const lowerPath = chunk.filePath.toLowerCase();
     const lowerText = chunk.text.toLowerCase();
 
-    // Exact symbol match is highest value
+    // Same order and exclusivity as the SQL CASE: first matching tier wins, no accumulation.
+    let score = 0;
     if (lowerSymbol && lowerSymbol === queryClean) {
-      score += 10.0;
+      score = LEXICAL_TIER.exactSymbol;
     } else if (lowerSymbol && terms.includes(lowerSymbol)) {
-      score += 6.0;
+      score = LEXICAL_TIER.symbolTerm;
     } else if (lowerSymbol && terms.some((t) => lowerSymbol.includes(t))) {
-      score += 3.0;
-    }
-
-    // Path match
-    if (terms.some((t) => lowerPath.includes(t))) {
-      score += 2.0;
-    }
-
-    // Text substring match
-    for (const term of terms) {
-      if (lowerText.includes(term)) {
-        score += 1.0;
-      }
+      score = LEXICAL_TIER.symbolPartial;
+    } else if (terms.some((t) => lowerPath.includes(t))) {
+      score = LEXICAL_TIER.path;
+    } else if (terms.some((t) => lowerText.includes(t))) {
+      score = LEXICAL_TIER.text;
     }
 
     if (score > 0) {
@@ -108,6 +117,10 @@ export function searchLexicalBaseline(
 
 /**
  * Hybrid retrieval combining vector and lexical search via Reciprocal Rank Fusion.
+ *
+ * Fuses with the production `fuseHybridResults` rather than a copy of it. A duplicated fusion could
+ * drift from production, so a change that worsened real search could still leave this benchmark's
+ * score unchanged in CI.
  */
 export function searchHybridBenchmark(
   corpus: BenchmarkChunk[],
@@ -117,42 +130,7 @@ export function searchHybridBenchmark(
   const vectorResults = searchVectorBaseline(corpus, queryText, 15);
   const lexicalResults = searchLexicalBaseline(corpus, queryText, 15);
 
-  const scoreMap = new Map<string, { chunk: RetrievedChunk; score: number }>();
-  const k = 60;
-  const queryClean = queryText.trim().toLowerCase();
-
-  for (let rank = 0; rank < vectorResults.length; rank++) {
-    const chunk = vectorResults[rank];
-    const rrfScore = 1.0 / (k + rank + 1);
-    scoreMap.set(chunk.id, { chunk, score: rrfScore });
-  }
-
-  for (let rank = 0; rank < lexicalResults.length; rank++) {
-    const chunk = lexicalResults[rank];
-    let rrfScore = 1.0 / (k + rank + 1);
-
-    // Exact symbol boost
-    if (chunk.symbolName && chunk.symbolName.toLowerCase() === queryClean) {
-      rrfScore += 0.05;
-    }
-
-    const existing = scoreMap.get(chunk.id);
-    if (existing) {
-      existing.score += rrfScore;
-    } else {
-      scoreMap.set(chunk.id, { chunk, score: rrfScore });
-    }
-  }
-
-  const sorted = Array.from(scoreMap.values())
-    .sort((a, b) => b.score - a.score)
-    .slice(0, topK)
-    .map((item) => ({
-      ...item.chunk,
-      similarity: item.score,
-    }));
-
-  return sorted;
+  return fuseHybridResults(vectorResults, lexicalResults, topK, { queryText });
 }
 
 export function checkRegressionThresholds(

@@ -1,44 +1,63 @@
-import { E2E_RAG_EVAL_DATASET, HELD_OUT_E2E_DATASET, type E2EEvalCase } from "./e2eDataset";
+import { E2E_RAG_EVAL_DATASET, HELD_OUT_E2E_DATASET } from "./e2eDataset";
 import { evaluateE2ERag, formatE2EReport, type E2EEvalSummary } from "./e2eEvaluator";
 import { buildBenchmarkCorpus } from "./benchmarkCorpus";
 import { searchHybridBenchmark } from "./runEval";
 import type { RetrievedChunk } from "../retriever";
 
+const STOP_WORDS = new Set([
+  "what", "where", "how", "the", "and", "for", "with", "does", "when", "during",
+  "are", "from", "into", "this", "that", "which", "used", "use", "uses",
+]);
+
+/** Query terms a chunk can be checked against, without consulting the answer key. */
+function queryTerms(query: string): string[] {
+  return query
+    .toLowerCase()
+    .replace(/[^a-z0-9_]/g, " ")
+    .split(/\s+/)
+    .filter((t) => t.length > 2 && !STOP_WORDS.has(t));
+}
+
 /**
- * Deterministic generation engine for offline/CI evaluation.
- * Faithfully simulates RAG response generation based on retrieved context.
+ * Deterministic stand-in for answer generation, for offline/CI use.
+ *
+ * Reads ONLY the query and the retrieved chunks. It must not consult `requiredFacts` or
+ * `evidenceType`: the evaluator checks those facts against the answer, so seeding them into the
+ * answer made every case pass by construction and the benchmark measured nothing about the
+ * prompt, the model, or the retriever. It also means these numbers say nothing about prompt or
+ * model quality — they are a retrieval and evaluator self-consistency check only.
  */
 export function generateDeterministicRagResponse(
   query: string,
   retrievedChunks: RetrievedChunk[],
-  evalCase: E2EEvalCase,
 ): string {
-  // If no evidence is expected or retrieved chunks have zero relevance
-  if (evalCase.evidenceType === "no_evidence") {
-    return "I cannot determine this from the indexed repository. The codebase does not contain information or configuration for this query.";
+  const terms = queryTerms(query);
+
+  // Grounding decided from the retrieved text, not from the case's declared evidence type.
+  const grounded = retrievedChunks
+    .map((chunk, i) => ({ chunk, index: i + 1 }))
+    .filter(({ chunk }) => {
+      const haystack = `${chunk.filePath} ${chunk.symbolName ?? ""} ${chunk.text}`.toLowerCase();
+      return terms.some((t) => haystack.includes(t));
+    })
+    .slice(0, 3);
+
+  if (grounded.length === 0) {
+    return "I cannot determine this from the indexed repository. No retrieved chunk mentions the queried behaviour.";
   }
 
-  // Filter chunks relevant to the query concepts
-  const relevantChunks: Array<{ chunk: RetrievedChunk; index: number }> = [];
-  retrievedChunks.forEach((c, i) => {
-    const hasConcept = evalCase.expectedConcepts.some((concept) =>
-      c.text.toLowerCase().includes(concept.toLowerCase()),
-    );
-    const hasFile = evalCase.expectedFiles.some((f) => c.filePath.endsWith(f) || f.endsWith(c.filePath));
-    if (hasConcept || hasFile) {
-      relevantChunks.push({ chunk: c, index: i + 1 });
-    }
-  });
+  const citations = grounded.map(({ index }) => `[${index}]`).join(", ");
+  const evidence = grounded
+    .map(({ chunk, index }) => {
+      const where = chunk.symbolName
+        ? `${chunk.filePath} (${chunk.symbolName})`
+        : chunk.filePath;
+      const snippet = chunk.text.split("\n").find((l) => l.trim().length > 0)?.trim() ?? "";
+      return `${where} [${index}]: ${snippet}`;
+    })
+    .join(" ");
 
-  if (relevantChunks.length === 0) {
-    return "I cannot determine this from the indexed repository. Not enough evidence was found in the retrieved code.";
-  }
-
-  // Build answer using citations
-  const citationMarkers = relevantChunks.map((r) => `[${r.index}]`).join(", ");
-  const factsList = evalCase.requiredFacts.join(" and ");
-
-  return `Based on the repository implementation in ${citationMarkers}, ${factsList} are used. The implementation in ${relevantChunks[0].chunk.filePath} [${relevantChunks[0].index}] defines this behavior.`;
+  return `Based on the retrieved code, ${evidence} Sources: ${citations}.`;
 }
 
 export function runE2EBenchmark(): {
@@ -57,7 +76,7 @@ export function runE2EBenchmark(): {
     const retrieved = searchHybridBenchmark(corpus, c.query, 8);
     retrievalMap.set(c.id, retrieved);
 
-    const answer = generateDeterministicRagResponse(c.query, retrieved, c);
+    const answer = generateDeterministicRagResponse(c.query, retrieved);
     answerMap.set(c.id, answer);
   }
 
@@ -73,17 +92,20 @@ export function runE2EBenchmark(): {
     const retrieved = searchHybridBenchmark(corpus, c.query, 8);
     heldOutRetrievalMap.set(c.id, retrieved);
 
-    const answer = generateDeterministicRagResponse(c.query, retrieved, c);
+    const answer = generateDeterministicRagResponse(c.query, retrieved);
     heldOutAnswerMap.set(c.id, answer);
   }
 
   const heldOutSummary = evaluateE2ERag(HELD_OUT_E2E_DATASET, heldOutRetrievalMap, heldOutAnswerMap);
   console.log("\n" + formatE2EReport(heldOutSummary));
 
-  console.log("\n[Production Accuracy Notice]");
+  console.log("\n[What These Numbers Measure]");
   console.log(
-    "High benchmark scores evaluate curated code-search cases and held-out queries. " +
-    "Real-world production accuracy depends on model reasoning capacity, repository complexity, and coverage of external libraries.",
+    "Answers are generated deterministically from the retrieved chunks, with no access to the\n" +
+    "expected facts, so these scores measure retrieval quality and whether the evaluator agrees\n" +
+    "with grounded code. They say nothing about the chat system prompt or the LLM: a live-model\n" +
+    "run is required for that. Real-world accuracy additionally depends on model reasoning,\n" +
+    "repository complexity, and coverage of external libraries.",
   );
 
   return { mainSummary, heldOutSummary };

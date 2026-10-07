@@ -53,7 +53,7 @@ vi.mock("@/lib/embeddings/router", () => ({
 }));
 
 import { embedRepository, runEmbedBatch } from "../embed";
-import { claimEmbeddingLease, finalizeEmbedding, clearEmbeddingLease } from "@/lib/leases/repositoryLeases";
+import { claimEmbeddingLease, finalizeEmbedding, clearEmbeddingLease, renewEmbeddingLease } from "@/lib/leases/repositoryLeases";
 
 /**
  * Helper to set up transaction mock for claimEmbeddingLeaseStep.
@@ -116,11 +116,15 @@ function setupClaimMock(opts: {
 
 /**
  * Helper to set up the finalizeEmbeddingStep mock (db.update directly, not in transaction).
+ * Renew and finalize both end in `.returning()` so the caller learns whether it still owns the
+ * claim; `owned` controls what the stub reports back.
  */
-function setupFinalizeMock() {
+function setupFinalizeMock(owned = true) {
   mockUpdate.mockReturnValue({
     set: vi.fn().mockReturnValue({
-      where: vi.fn().mockResolvedValue(undefined),
+      where: vi.fn().mockReturnValue({
+        returning: vi.fn().mockResolvedValue(owned ? [{ id: "repo-123" }] : []),
+      }),
     }),
   });
 }
@@ -259,6 +263,19 @@ describe("embedRepository workflow", () => {
     expect(result.success).toBe(true);
     expect(result.totalEmbedded).toBe(2);
     expect(mockGenerateEmbeddings).toHaveBeenCalledWith({ input: ["text 1", "text 2"], truncate: "END" });
+  });
+
+  it("stops embedding without touching state when the lease was taken over", async () => {
+    setupClaimMock({ repoFound: true, hasPendingChunks: true });
+    // Ownership check fails: another worker claimed the run after this one's lease expired.
+    setupFinalizeMock(false);
+
+    const result = await embedRepository({ repositoryId: "repo-123" });
+
+    expect(result.success).toBe(true);
+    expect(result.totalEmbedded).toBe(0);
+    // The run must bail out before embedding anything rather than write on the new owner's behalf.
+    expect(mockGenerateEmbeddings).not.toHaveBeenCalled();
   });
 
   it("throws an error if embedding count returned from API does not match chunk count", async () => {
@@ -417,7 +434,9 @@ function setupClaimStub(opts: {
     : undefined;
 
   const updateSet = vi.fn().mockReturnValue({
-    where: vi.fn().mockResolvedValue(undefined),
+    where: vi.fn().mockReturnValue({
+      returning: vi.fn().mockResolvedValue([{ id: "repo-123" }]),
+    }),
   });
   const txUpdate = vi.fn().mockReturnValue({ set: updateSet });
 
@@ -485,42 +504,62 @@ describe("claimEmbeddingLease (extracted function)", () => {
     );
   });
 
-  it("claims the lease with a 10 minute expiry when pending chunks exist", async () => {
+  it("claims the lease with a 10 minute expiry and a claim id when pending chunks exist", async () => {
     const { stubDb, updateSet } = setupClaimStub({ hasPendingChunks: true });
     const before = Date.now();
 
     const result = await claimEmbeddingLease(stubDb as any, "repo-123");
 
-    expect(result).toEqual({ claimed: true });
+    expect(result.claimed).toBe(true);
+    if (!result.claimed) throw new Error("expected the lease to be claimed");
+    expect(result.claimId).toEqual(expect.any(String));
+    expect(result.claimId.length).toBeGreaterThan(0);
+
     expect(updateSet).toHaveBeenCalledTimes(1);
     const arg = updateSet.mock.calls[0][0];
     expect(arg.embeddingStatus).toBe("processing");
+    // The claim id is what lets final writes prove ownership: a run can outlive the lease.
+    expect(arg.embeddingClaimId).toBe(result.claimId);
     const expiryMs = (arg.embeddingLeaseExpiresAt as Date).getTime();
     const tenMinutes = 10 * 60 * 1000;
     expect(expiryMs).toBeGreaterThanOrEqual(before + tenMinutes);
     expect(expiryMs).toBeLessThanOrEqual(Date.now() + tenMinutes);
   });
+
+  it("clears the claim id when no pending chunks remain", async () => {
+    const { stubDb, updateSet } = setupClaimStub({ hasPendingChunks: false });
+
+    await claimEmbeddingLease(stubDb as any, "repo-123");
+
+    expect(updateSet).toHaveBeenCalledWith(
+      expect.objectContaining({ embeddingClaimId: null })
+    );
+  });
 });
 
 describe("finalizeEmbedding (extracted function)", () => {
-  function setupFinalizeStub() {
+  function setupFinalizeStub(matched = true) {
     const updateSet = vi.fn().mockReturnValue({
-      where: vi.fn().mockResolvedValue(undefined),
+      where: vi.fn().mockReturnValue({
+        returning: vi.fn().mockResolvedValue(matched ? [{ id: "repo-123" }] : []),
+      }),
     });
     const update = vi.fn().mockReturnValue({ set: updateSet });
     const stubDb = { select: vi.fn(), update, transaction: vi.fn() };
     return { stubDb, update, updateSet };
   }
 
-  it("sets the given status and clears the lease", async () => {
+  it("sets the given status and clears the lease for the matching claim", async () => {
     const { stubDb, updateSet } = setupFinalizeStub();
 
-    await finalizeEmbedding(stubDb as any, "repo-123", "ready");
+    const applied = await finalizeEmbedding(stubDb as any, "repo-123", "ready", "claim-a");
 
+    expect(applied).toBe(true);
     expect(updateSet).toHaveBeenCalledWith(
       expect.objectContaining({
         embeddingStatus: "ready",
         embeddingLeaseExpiresAt: null,
+        embeddingClaimId: null,
       })
     );
     expect(updateSet.mock.calls[0][0].updatedAt).toBeInstanceOf(Date);
@@ -529,7 +568,7 @@ describe("finalizeEmbedding (extracted function)", () => {
   it("supports the failed status", async () => {
     const { stubDb, updateSet } = setupFinalizeStub();
 
-    await finalizeEmbedding(stubDb as any, "repo-123", "failed");
+    await finalizeEmbedding(stubDb as any, "repo-123", "failed", "claim-a");
 
     expect(updateSet).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -538,18 +577,61 @@ describe("finalizeEmbedding (extracted function)", () => {
       })
     );
   });
+
+  it("reports no write when the claim no longer owns the row", async () => {
+    // Another worker claimed the run after this one's lease expired. A write here would mark
+    // someone else's run as ready or failed.
+    const { stubDb, updateSet } = setupFinalizeStub(false);
+
+    const applied = await finalizeEmbedding(stubDb as any, "repo-123", "ready", "stale-claim");
+
+    expect(applied).toBe(false);
+    expect(updateSet).toHaveBeenCalled();
+  });
+});
+
+describe("renewEmbeddingLease", () => {
+  function setupRenewStub(matched: boolean) {
+    const updateSet = vi.fn().mockReturnValue({
+      where: vi.fn().mockReturnValue({
+        returning: vi.fn().mockResolvedValue(matched ? [{ id: "repo-123" }] : []),
+      }),
+    });
+    const update = vi.fn().mockReturnValue({ set: updateSet });
+    return { stubDb: { select: vi.fn(), update }, updateSet };
+  }
+
+  it("extends the lease when the claim still owns the row", async () => {
+    const { stubDb, updateSet } = setupRenewStub(true);
+    const before = Date.now();
+
+    const renewed = await renewEmbeddingLease(stubDb as any, "repo-123", "claim-a");
+
+    expect(renewed).toBe(true);
+    const expiry = (updateSet.mock.calls[0][0].embeddingLeaseExpiresAt as Date).getTime();
+    expect(expiry).toBeGreaterThanOrEqual(before + 10 * 60 * 1000);
+  });
+
+  it("reports the lease as lost when the claim was taken over", async () => {
+    const { stubDb } = setupRenewStub(false);
+
+    expect(await renewEmbeddingLease(stubDb as any, "repo-123", "stale-claim")).toBe(false);
+  });
 });
 
 describe("clearEmbeddingLease", () => {
   it("clears embedding lease without marking ready so later run can continue", async () => {
     const updateSet = vi.fn().mockReturnValue({
-      where: vi.fn().mockResolvedValue(undefined),
+      where: vi.fn().mockReturnValue({
+        returning: vi.fn().mockResolvedValue([{ id: "repo-123" }]),
+      }),
     });
     const update = vi.fn().mockReturnValue({ set: updateSet });
     const stubDb = { select: vi.fn(), update, transaction: vi.fn() };
 
-    await clearEmbeddingLease(stubDb as any, "repo-123");
+    const applied = await clearEmbeddingLease(stubDb as any, "repo-123", "claim-a");
 
+    expect(applied).toBe(true);
     expect(updateSet).toHaveBeenCalledWith(
       expect.objectContaining({
         embeddingStatus: "processing",

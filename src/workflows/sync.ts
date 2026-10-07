@@ -22,6 +22,12 @@ export interface SyncResult {
 
 const DEFAULT_BATCH_SIZE = 5;
 
+/**
+ * Ceiling on batches claimed per daily run, so a large backlog cannot hold one workflow open
+ * indefinitely. At the default batch size this is 100 repositories per run.
+ */
+const MAX_BATCHES_PER_RUN = 20;
+
 async function claimSyncBatchStep(batchSize: number) {
   "use step";
   return claimSyncBatch(db, batchSize);
@@ -89,37 +95,37 @@ export async function syncRepositories(payload: SyncPayload): Promise<SyncResult
   "use workflow";
 
   const batchSize = payload.batchSize || DEFAULT_BATCH_SIZE;
-  
-  const claimedRepos = await claimSyncBatchStep(batchSize);
-  
-  if (claimedRepos.length === 0) {
-    return {
-      success: true,
-      checkedCount: 0,
-      triggeredCount: 0,
-      skippedCount: 0,
-      errorsCount: 0,
-    };
-  }
 
   let triggeredCount = 0;
   let skippedCount = 0;
   let errorsCount = 0;
+  let checkedCount = 0;
 
-  for (const repo of claimedRepos) {
-    const result = await checkAndTriggerStep(repo);
-    if (result.error) {
-      errorsCount++;
-    } else if (result.triggered) {
-      triggeredCount++;
-    } else {
-      skippedCount++;
+  // Claim and drain batches. Claiming a single batch and returning left every repository beyond
+  // the first `batchSize` unchecked until the next daily run, so they went stale for days. The
+  // batch size still bounds each claim; the cap only stops a pathological backlog in one run.
+  for (let batch = 0; batch < MAX_BATCHES_PER_RUN; batch++) {
+    const claimedRepos = await claimSyncBatchStep(batchSize);
+
+    for (const repo of claimedRepos) {
+      const result = await checkAndTriggerStep(repo);
+      checkedCount++;
+      if (result.error) {
+        errorsCount++;
+      } else if (result.triggered) {
+        triggeredCount++;
+      } else {
+        skippedCount++;
+      }
     }
+
+    // A short batch means the due queue is drained.
+    if (claimedRepos.length < batchSize) break;
   }
 
   return {
     success: true,
-    checkedCount: claimedRepos.length,
+    checkedCount,
     triggeredCount,
     skippedCount,
     errorsCount,

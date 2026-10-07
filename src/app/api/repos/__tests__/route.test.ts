@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { POST } from "../route";
+import { embedRepository } from "@/workflows/embed";
 
 const mockGetSession = vi.fn();
 const mockGetAccessToken = vi.fn();
@@ -69,11 +70,17 @@ vi.mock("@/db/schema", () => ({
     userId: "userRepositories_userId",
     repositoryId: "userRepositories_repositoryId",
   },
+  chunks: {
+    id: "chunks_id",
+    repositoryId: "chunks_repositoryId",
+    embedding: "chunks_embedding",
+  },
 }));
 
 vi.mock("drizzle-orm", () => ({
   and: vi.fn(),
   eq: vi.fn(),
+  isNull: vi.fn(),
 }));
 
 let mockExistingRepo: any = null;
@@ -81,6 +88,8 @@ let mockUserRepos: any[] = [];
 let mockUserRecord: any = null;
 /** Whether the user already has a user_repositories row for the repository being added. */
 let mockAssociationExists = false;
+/** Whether the existing repository has chunks still awaiting an embedding. */
+let mockPendingChunks = false;
 
 function createSelectChain() {
   return {
@@ -90,8 +99,10 @@ function createSelectChain() {
       const isRepositories =
         table?.githubId === "repositories_githubId" || typeof table?.githubId === "bigint" || table?.githubId instanceof BigInt || table === "repositories";
       const isUser = table === "user" || Boolean(table?.plan) || table?.id === "user_id";
+      const isChunks = table?.embedding === "chunks_embedding" || table === "chunks";
 
       const getResult = () => {
+        if (isChunks) return mockPendingChunks ? [{ id: "chunk-pending" }] : [];
         if (isRepositories) return mockExistingRepo ? [mockExistingRepo] : [];
         if (isUser) return mockUserRecord ? [mockUserRecord] : [];
         // user_repositories: the plan-limit count
@@ -99,8 +110,11 @@ function createSelectChain() {
       };
 
       // .limit(1) is an existence probe; the bare await is the count. Model them separately.
-      const getLimitedResult = () =>
-        isRepositories || isUser ? getResult() : mockAssociationExists ? [{ repositoryId: "existing" }] : [];
+      const getLimitedResult = () => {
+        if (isChunks) return getResult();
+        if (isRepositories || isUser) return getResult();
+        return mockAssociationExists ? [{ repositoryId: "existing" }] : [];
+      };
 
       const whereFn = vi.fn().mockImplementation(() => {
         return Object.assign(Promise.resolve(getResult()), {
@@ -142,6 +156,10 @@ vi.mock("@/workflows/ingest", () => ({
   ingestRepository: vi.fn(),
 }));
 
+vi.mock("@/workflows/embed", () => ({
+  embedRepository: vi.fn(),
+}));
+
 describe("POST /api/repos", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -149,6 +167,12 @@ describe("POST /api/repos", () => {
     mockUserRepos = [];
     mockUserRecord = null;
     mockAssociationExists = false;
+    mockPendingChunks = false;
+    // `mockClear` (inside clearAllMocks) keeps queued `mockResolvedValueOnce` values, so a test
+    // that returns early would leak its GitHub responses into the next one.
+    mockGetRepository.mockReset();
+    mockGetCommit.mockReset();
+    mockGetTree.mockReset();
     mockDbSelect.mockImplementation(createSelectChain);
     mockDbInsert.mockReturnValue({
       values: vi.fn().mockReturnValue({
@@ -351,6 +375,167 @@ describe("POST /api/repos", () => {
     const response = await POST(request);
     expect(response.status).toBe(200);
     expect(mockWorkflowStart).toHaveBeenCalled();
+  });
+
+  it("saves verified visibility when a repository flips to private without being renamed", async () => {
+    mockGetSession.mockResolvedValueOnce({ user: { id: "user-1" } } as any);
+    mockGetAccessToken.mockResolvedValueOnce({ accessToken: "token-123" });
+    // Private repositories need Full access mode, otherwise the route 403s before saving.
+    mockGetUserAccessMode.mockResolvedValueOnce("full");
+    mockGetRepository.mockResolvedValueOnce({
+      id: 12345,
+      name: "flipped-repo",
+      owner: { login: "owner" },
+      html_url: "https://github.com/owner/flipped-repo",
+      default_branch: "main",
+      // GitHub now reports it private; the stored row still says public.
+      private: true,
+    });
+    mockGetCommit.mockResolvedValueOnce({ sha: "sha-123" });
+    mockGetTree.mockResolvedValueOnce({ tree: [{ type: "blob", size: 10 }], truncated: false });
+
+    mockExistingRepo = {
+      id: "flipped-id",
+      embeddingStatus: "ready",
+      name: "flipped-repo",
+      owner: "owner",
+      url: "https://github.com/owner/flipped-repo",
+      defaultBranch: "main",
+      isPrivate: false,
+    };
+
+    let saved: any = null;
+    mockDbUpdate.mockImplementation(() => ({
+      set: (values: any) => {
+        saved = values;
+        return { where: vi.fn().mockResolvedValue(undefined) };
+      },
+    }));
+
+    const request = new Request("http://localhost/api/repos", {
+      method: "POST",
+      body: JSON.stringify({ url: "https://github.com/owner/flipped-repo" }),
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(200);
+    // Without this write, runEmbedBatch reads isPrivate = false and sends private source to Gemini.
+    expect(saved).not.toBeNull();
+    expect(saved.isPrivate).toBe(true);
+  });
+
+  it("retries embeddings directly when chunks are already indexed", async () => {
+    mockGetSession.mockResolvedValueOnce({ user: { id: "user-1" } } as any);
+    mockGetAccessToken.mockResolvedValueOnce({ accessToken: "token-123" });
+    mockGetRepository.mockResolvedValueOnce({
+      id: 12345,
+      name: "embed-failed",
+      owner: { login: "owner" },
+      html_url: "https://github.com/owner/embed-failed",
+      default_branch: "main",
+      private: false,
+    });
+    mockGetCommit.mockResolvedValueOnce({ sha: "sha-123" });
+    mockGetTree.mockResolvedValueOnce({ tree: [{ type: "blob", size: 10 }], truncated: false });
+    mockExistingRepo = {
+      id: "embed-failed-id",
+      embeddingStatus: "failed",
+      name: "embed-failed",
+      owner: "owner",
+      url: "https://github.com/owner/embed-failed",
+      defaultBranch: "main",
+    };
+    // Chunks exist but have no embedding: ingestion already finished.
+    mockPendingChunks = true;
+
+    const request = new Request("http://localhost/api/repos", {
+      method: "POST",
+      body: JSON.stringify({ url: "https://github.com/owner/embed-failed" }),
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(200);
+    // Restarting ingestion would be rejected for Free users with tracked files, and unchanged
+    // files return `skipped` without triggering embedding, so recovery must go straight to embed.
+    expect(mockWorkflowStart).toHaveBeenCalledWith(embedRepository, [
+      { repositoryId: "embed-failed-id" },
+    ]);
+  });
+
+  it("falls back to the URL when a legacy row has no github_id and backfills it", async () => {
+    mockGetSession.mockResolvedValueOnce({ user: { id: "user-1" } } as any);
+    mockGetAccessToken.mockResolvedValueOnce({ accessToken: "token-123" });
+    mockGetRepository.mockResolvedValueOnce({
+      id: 777,
+      name: "legacy-repo",
+      owner: { login: "owner" },
+      html_url: "https://github.com/owner/legacy-repo",
+      default_branch: "main",
+      private: false,
+    });
+    mockGetCommit.mockResolvedValueOnce({ sha: "sha-123" });
+    mockGetTree.mockResolvedValueOnce({ tree: [{ type: "blob", size: 10 }], truncated: false });
+
+    // Legacy row: github_id is null, so the github-id lookup misses it and the route falls back
+    // to the URL lookup.
+    const legacy = {
+      id: "legacy-id",
+      githubId: null,
+      embeddingStatus: "ready",
+      name: "legacy-repo",
+      owner: "owner",
+      url: "https://github.com/owner/legacy-repo",
+      defaultBranch: "main",
+    };
+
+    let repositoryLookups = 0;
+    mockDbSelect.mockImplementation(() => {
+      const chain = createSelectChain();
+      const originalFrom = chain.from;
+      chain.from = vi.fn().mockImplementation((table: any) => {
+        const result = originalFrom(table);
+        const isRepositories =
+          table?.githubId === "repositories_githubId" || table === "repositories";
+        if (!isRepositories) return result;
+        // First repositories select is the github-id lookup, second is the URL fallback.
+        repositoryLookups++;
+        const row = repositoryLookups === 1 ? [] : [legacy];
+        return {
+          ...result,
+          where: vi.fn().mockReturnValue(
+            Object.assign(Promise.resolve(row), {
+              limit: vi.fn().mockResolvedValue(row),
+              for: vi.fn().mockResolvedValue(row),
+            }),
+          ),
+        };
+      });
+      return chain;
+    });
+
+    let backfilled: any = null;
+    mockDbUpdate.mockImplementation(() => ({
+      set: (values: any) => {
+        backfilled = values;
+        return { where: vi.fn().mockResolvedValue(undefined) };
+      },
+    }));
+
+    const request = new Request("http://localhost/api/repos", {
+      method: "POST",
+      body: JSON.stringify({ url: "https://github.com/owner/legacy-repo" }),
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    // Reuses the existing row rather than inserting a duplicate that fails on the unique URL.
+    expect(data.repositoryId).toBe("legacy-id");
+    expect(data.alreadyExists).toBe(true);
+    expect(backfilled?.githubId).toBe(BigInt(777));
   });
 
   it("does not start duplicate ingestion when existing repository is already ready", async () => {

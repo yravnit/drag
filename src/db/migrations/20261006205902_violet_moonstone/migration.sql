@@ -1,0 +1,1 @@
+ALTER TABLE "repositories" ADD COLUMN "embedding_claim_id" text;

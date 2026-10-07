@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth/server";
 import { db, type Database } from "@/db/db";
-import { repositories, userRepositories } from "@/db/schema";
-import { and, eq } from "drizzle-orm";
+import { repositories, userRepositories, chunks } from "@/db/schema";
+import { and, eq, isNull } from "drizzle-orm";
 import {
   GitHubApiClient,
   GitHubRepositoryResponse,
@@ -10,6 +10,7 @@ import {
 } from "@/lib/ingestion/githubApiClient";
 import { start } from "workflow/api";
 import { ingestRepository } from "@/workflows/ingest";
+import { embedRepository } from "@/workflows/embed";
 import { checkRateLimit } from "@/lib/rateLimit/rateLimiter";
 import { getUserAccessMode } from "@/lib/auth/accessMode";
 import {
@@ -270,11 +271,30 @@ export async function POST(request: Request) {
 
     // 7. Insert or check repository row
     let repoId: string;
-    const [existing] = await db
+    const [existingByGithubId] = await db
       .select()
       .from(repositories)
       .where(eq(repositories.githubId, githubId))
       .limit(1);
+
+    // Rows created before `github_id` existed have it null, so the github-id lookup misses them and
+    // the later insert then fails on the unique URL. Fall back to the URL and backfill the id so
+    // the row becomes findable by github id on every later request.
+    let existing = existingByGithubId;
+    if (!existing) {
+      const [existingByUrl] = await db
+        .select()
+        .from(repositories)
+        .where(eq(repositories.url, meta.html_url))
+        .limit(1);
+      if (existingByUrl) {
+        await db
+          .update(repositories)
+          .set({ githubId, updatedAt: new Date() })
+          .where(eq(repositories.id, existingByUrl.id));
+        existing = { ...existingByUrl, githubId };
+      }
+    }
 
     // repositories rows are shared across users and keyed by githubId, so the indexed branch
     // belongs to every associated user. Reject a different branch instead of silently serving
@@ -290,28 +310,41 @@ export async function POST(request: Request) {
 
     const now = new Date();
     let shouldStartIngest = false;
+    let shouldRetryEmbeddingsOnly = false;
+
+    // Step 8 attaches this repository to the user. Step D of the detach route takes the same
+    // `SELECT ... FOR UPDATE` on this row, so a concurrent remove cannot decide "nobody is
+    // associated" while this insert is still in flight and delete the row out from under it.
     const defaultMeta = getDefaultEmbeddingMetadataForVisibility(isPrivate);
 
     if (existing) {
       repoId = existing.id;
 
-      // Update metadata on rename or transfer. headCommitSha is deliberately not written here:
-      // the ingestion pipeline records it after a successful ingest. Writing it early makes the
-      // workflow's unchanged-SHA skip fire and leaves the repository permanently un-indexed.
-      if (
+      const renamedOrTransferred =
         existing.name !== meta.name ||
         existing.owner !== meta.owner.login ||
-        existing.url !== meta.html_url
-      ) {
+        existing.url !== meta.html_url;
+
+      // Verified visibility must be saved whether or not the repository was renamed. A repo that
+      // flips public -> private without a rename previously kept isPrivate = false, so
+      // runEmbedBatch read the stale value and sent private source to Gemini.
+      if (renamedOrTransferred || Boolean(existing.isPrivate) !== isPrivate) {
+        // headCommitSha is deliberately not written here: the ingestion pipeline records it after a
+        // successful ingest. Writing it early makes the workflow's unchanged-SHA skip fire and leaves
+        // the repository permanently un-indexed.
         await db
           .update(repositories)
           .set({
-            name: meta.name,
-            owner: meta.owner.login,
-            url: meta.html_url,
+            ...(renamedOrTransferred
+              ? {
+                  name: meta.name,
+                  owner: meta.owner.login,
+                  url: meta.html_url,
+                  description: meta.description,
+                  primaryLanguage: meta.language,
+                }
+              : {}),
             defaultBranch: targetBranch,
-            description: meta.description,
-            primaryLanguage: meta.language,
             isPrivate,
             embeddingProvider: existing.embeddingProvider ?? defaultMeta.embeddingProvider,
             embeddingModel: existing.embeddingModel ?? defaultMeta.embeddingModel,
@@ -327,8 +360,19 @@ export async function POST(request: Request) {
         existing.embeddingStatus === "processing" &&
         (!existing.embeddingLeaseExpiresAt || existing.embeddingLeaseExpiresAt < now);
 
+      // Chunks already exist means ingestion finished and only embedding failed. Re-running
+      // ingestion there is wrong twice over: Free users are rejected by the incremental-reindex
+      // check, and unchanged files return `skipped`, which never triggers embedding. Restart the
+      // embedding workflow directly instead.
       if (isFailed || isStale) {
-        shouldStartIngest = true;
+        const [pending] = await db
+          .select({ id: chunks.id })
+          .from(chunks)
+          .where(and(eq(chunks.repositoryId, existing.id), isNull(chunks.embedding)))
+          .limit(1);
+
+        shouldRetryEmbeddingsOnly = Boolean(pending);
+        shouldStartIngest = !shouldRetryEmbeddingsOnly;
         await db
           .update(repositories)
           .set({
@@ -364,10 +408,18 @@ export async function POST(request: Request) {
     // 8. Enforce the plan repository limit and create the association in one transaction.
     // The user row lock is held across the insert, so two concurrent requests cannot both
     // observe the same count and both insert. Existing associations are exempt, which keeps
-    // retry and re-add paths working for users already at their limit.
+    // retry and re-add paths working for users already at their limit. The repository row lock
+    // serializes this attach against a concurrent DELETE /api/repos/[id].
     const limitCheck = await db.transaction(async (tx) => {
       const check = await checkRepositoryLimit(tx as unknown as Database, session.user.id, repoId);
       if (!check.allowed) return check;
+
+      // Matches the lock the detach route holds while it recounts associations.
+      await tx
+        .select({ id: repositories.id })
+        .from(repositories)
+        .where(eq(repositories.id, repoId))
+        .for("update");
 
       const [alreadyJoined] = await tx
         .select()
@@ -395,7 +447,12 @@ export async function POST(request: Request) {
       );
     }
 
-    if (shouldStartIngest) {
+    if (shouldRetryEmbeddingsOnly) {
+      // Chunks are already parsed; only the embedding pass failed. Restarting ingestion would be
+      // rejected for Free users with tracked files and would return `skipped` for unchanged files,
+      // leaving recovery to the daily cron instead of the user's Retry button.
+      await start(embedRepository, [{ repositoryId: repoId }]);
+    } else if (shouldStartIngest) {
       // Start ingestion workflow
       await start(ingestRepository, [
         {
@@ -412,7 +469,9 @@ export async function POST(request: Request) {
       success: true,
       repositoryId: repoId,
       alreadyExists: !!existing,
-      status: existing?.embeddingStatus ?? "processing",
+      status: shouldRetryEmbeddingsOnly
+        ? "processing"
+        : (existing?.embeddingStatus ?? "processing"),
     });
   } catch (error) {
     console.error("[POST /api/repos] Error:", error);

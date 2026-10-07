@@ -65,10 +65,23 @@ function assocSelect(rows: Array<{ userId: string }>) {
   });
 }
 
+/**
+ * `claimSyncBatch` returns a full batch once and then reports an empty queue, which is what a
+ * real drain looks like: the workflow keeps claiming until a batch comes back short.
+ */
+function claimOnce(rows: Array<Record<string, unknown>>) {
+  let claimed = false;
+  mockClaimSyncBatch.mockImplementation(async () => {
+    if (claimed) return [];
+    claimed = true;
+    return rows;
+  });
+}
+
 describe("sync incremental-reindex entitlement across shared repositories", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockClaimSyncBatch.mockResolvedValue([
+    claimOnce([
       { id: "repo-1", owner: "acme", name: "widget", defaultBranch: "main", headCommitSha: null },
     ]);
     mockSettleSyncLease.mockResolvedValue(undefined);
@@ -113,5 +126,50 @@ describe("sync incremental-reindex entitlement across shared repositories", () =
     expect(mockStart).toHaveBeenCalledWith(expect.any(Function), [
       expect.objectContaining({ userId: undefined }),
     ]);
+  });
+
+  it("drains every due batch instead of checking only the first five", async () => {
+    // Three full batches of two, then an empty queue: 6 repositories are due.
+    const batches = [
+      [
+        { id: "r1", owner: "a", name: "n1", defaultBranch: "main", headCommitSha: null },
+        { id: "r2", owner: "a", name: "n2", defaultBranch: "main", headCommitSha: null },
+      ],
+      [
+        { id: "r3", owner: "a", name: "n3", defaultBranch: "main", headCommitSha: null },
+        { id: "r4", owner: "a", name: "n4", defaultBranch: "main", headCommitSha: null },
+      ],
+      [
+        { id: "r5", owner: "a", name: "n5", defaultBranch: "main", headCommitSha: null },
+        { id: "r6", owner: "a", name: "n6", defaultBranch: "main", headCommitSha: null },
+      ],
+    ];
+    let index = 0;
+    mockClaimSyncBatch.mockImplementation(async () => batches[index++] ?? []);
+
+    assocSelect([]);
+    mockGetUserEntitlements.mockResolvedValue(FREE);
+
+    const result = await syncRepositories({ batchSize: 2 });
+
+    // Claiming one batch and returning left repositories 3-6 unchecked until the next daily run.
+    expect(result.checkedCount).toBe(6);
+    expect(result.triggeredCount).toBe(6);
+    expect(mockClaimSyncBatch).toHaveBeenCalledTimes(4);
+  });
+
+  it("stops claiming once a batch comes back short", async () => {
+    claimOnce([
+      { id: "r1", owner: "a", name: "n1", defaultBranch: "main", headCommitSha: null },
+      { id: "r2", owner: "a", name: "n2", defaultBranch: "main", headCommitSha: null },
+    ]);
+    assocSelect([]);
+    mockGetUserEntitlements.mockResolvedValue(FREE);
+
+    const result = await syncRepositories({ batchSize: 5 });
+
+    expect(result.checkedCount).toBe(2);
+    // A short batch means the due queue is drained, so no further claim is made.
+    expect(mockClaimSyncBatch).toHaveBeenCalledTimes(1);
   });
 });

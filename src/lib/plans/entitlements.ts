@@ -3,6 +3,7 @@ import { user } from "@/db/schemas/auth";
 import { userRepositories } from "@/db/schemas/userRepositories";
 import { rateLimits } from "@/db/schemas/rateLimits";
 import { and, eq, gt, sql } from "drizzle-orm";
+import { consumeCounter, type DbOrTx as CounterDbOrTx } from "@/lib/rateLimit/rateLimiter";
 import {
   PlanType,
   PlanEntitlements,
@@ -172,8 +173,7 @@ export async function getUserEntitlements(
   return base;
 }
 
-type TransactionClient = Parameters<Parameters<Database["transaction"]>[0]>[0];
-type DbOrTx = Database | TransactionClient;
+type DbOrTx = CounterDbOrTx;
 
 /**
  * Checks whether the user can add another repository under their plan limit.
@@ -389,77 +389,20 @@ export async function checkAndConsumeMonthlyQueryQuota(
   }
 
   const performQuotaCheck = async (client: DbOrTx) => {
-    const whereRes = client
-      .select()
-      .from(rateLimits)
-      .where(
-        and(
-          eq(rateLimits.userId, userId),
-          eq(rateLimits.action, RAG_MONTHLY_QUOTA_ACTION),
-        ),
-      );
-    const limitQuery = typeof whereRes?.for === "function" ? whereRes.for("update") : whereRes;
-    const records = await limitQuery;
-    const existing = Array.isArray(records) && records.length > 0 ? records[0] : null;
-
-    if (!existing || now >= existing.windowEnd) {
-      // Initialize new window
-      await client
-        .insert(rateLimits)
-        .values({
-          userId,
-          action: RAG_MONTHLY_QUOTA_ACTION,
-          count: 1,
-          windowStart,
-          windowEnd,
-          updatedAt: now,
-        })
-        .onConflictDoUpdate({
-          target: [rateLimits.userId, rateLimits.action],
-          set: {
-            count: 1,
-            windowStart,
-            windowEnd,
-            updatedAt: now,
-          },
-        });
-
-      return {
-        allowed: 1 <= monthlyLimit,
-        count: 1,
-        limit: monthlyLimit,
-        resetAt: windowEnd.getTime(),
-      };
-    }
-
-    if (existing.count >= monthlyLimit) {
-      return {
-        allowed: false,
-        count: existing.count,
-        limit: monthlyLimit,
-        resetAt: existing.windowEnd.getTime(),
-      };
-    }
-
-    const newCount = existing.count + 1;
-    await client
-      .update(rateLimits)
-      .set({
-        count: newCount,
-        updatedAt: now,
-      })
-      .where(
-        and(
-          eq(rateLimits.userId, userId),
-          eq(rateLimits.action, RAG_MONTHLY_QUOTA_ACTION),
-        ),
-      );
+    const consumed = await consumeCounter(client, {
+      userId,
+      action: RAG_MONTHLY_QUOTA_ACTION,
+      maxRequests: monthlyLimit,
+      windowStart,
+      windowEnd,
+      now,
+    });
 
     return {
-      allowed: true,
-      count: newCount,
+      allowed: consumed.allowed,
+      count: consumed.count,
       limit: monthlyLimit,
-      resetAt: existing.windowEnd.getTime(),
+      resetAt: consumed.windowEnd.getTime(),
     };
   };
 

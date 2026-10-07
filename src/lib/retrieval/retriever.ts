@@ -1,6 +1,7 @@
 import { db, type Database } from "@/db/db";
 import { chunks, repositories } from "@/db/schema";
 import { and, eq, isNotNull, sql } from "drizzle-orm";
+import { fuseHybridResults } from "./fusion";
 
 export interface RetrievedChunk {
   id: string;
@@ -168,55 +169,9 @@ async function retrieveChunksLexical(
   }
 }
 
-/**
- * Fuses vector candidates and lexical candidates using Reciprocal Rank Fusion (RRF).
- * Adds a relevance boost when a candidate matches the query's exact symbol name.
- */
-export function fuseHybridResults(
-  vectorResults: RetrievedChunk[],
-  lexicalResults: RetrievedChunk[],
-  topK = 5,
-  options?: { k?: number; queryText?: string },
-): RetrievedChunk[] {
-  const k = options?.k ?? 60;
-  const queryClean = options?.queryText ? options.queryText.trim().toLowerCase() : "";
-  const scoreMap = new Map<string, { chunk: RetrievedChunk; score: number }>();
-
-  // Add vector ranks
-  for (let rank = 0; rank < vectorResults.length; rank++) {
-    const chunk = vectorResults[rank];
-    const rrfScore = 1.0 / (k + rank + 1);
-    scoreMap.set(chunk.id, { chunk, score: rrfScore });
-  }
-
-  // Add lexical ranks
-  for (let rank = 0; rank < lexicalResults.length; rank++) {
-    const chunk = lexicalResults[rank];
-    let rrfScore = 1.0 / (k + rank + 1);
-
-    // Exact symbol boost
-    if (queryClean && chunk.symbolName && chunk.symbolName.toLowerCase() === queryClean) {
-      rrfScore += 0.05;
-    }
-
-    const existing = scoreMap.get(chunk.id);
-    if (existing) {
-      existing.score += rrfScore;
-    } else {
-      scoreMap.set(chunk.id, { chunk, score: rrfScore });
-    }
-  }
-
-  const sorted = Array.from(scoreMap.values())
-    .sort((a, b) => b.score - a.score)
-    .slice(0, topK)
-    .map((item) => ({
-      ...item.chunk,
-      similarity: item.score,
-    }));
-
-  return sorted;
-}
+// Re-exported so existing importers of the retriever keep working. The implementation lives in
+// `fusion.ts` so the offline benchmark can run it without importing the database client.
+export { fuseHybridResults };
 
 /**
  * Combined hybrid retrieval: executes vector search and lexical search in parallel,
