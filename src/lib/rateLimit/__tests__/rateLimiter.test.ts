@@ -10,15 +10,18 @@ interface CapturedStatement {
   setCountSql: string;
   setCountParams: unknown[];
   setOther: Record<string, unknown>;
-  allowedSql: string;
-  allowedParams: unknown[];
+  setWhereSql: string;
+  setWhereParams: unknown[];
 }
 
 /**
  * Stubs the database at the upsert boundary. `onConflictDoUpdate` is evaluated against a real
- * in-memory row using the same rules as the SQL, with `maxRequests` read back out of the rendered
- * `RETURNING` params rather than duplicated here, so changing the cap in the SQL cannot leave this
- * stub asserting a stale number.
+ * in-memory row using the same rules as Postgres applies, with `maxRequests` read back out of the
+ * rendered `setWhere` params rather than duplicated here, so changing the cap in the SQL cannot
+ * leave this stub asserting a stale number.
+ *
+ * The one behaviour this models that a naive mock would miss: `DO UPDATE ... WHERE false` performs
+ * no update and returns no row, which is how a rejected request is reported without writing.
  */
 function createStubDb(initialRecords: Record<string, any> = {}) {
   const store = new Map<string, any>(Object.entries(initialRecords));
@@ -32,50 +35,44 @@ function createStubDb(initialRecords: Record<string, any> = {}) {
     },
     insert: () => ({
       values: (values: Record<string, any>) => ({
-        onConflictDoUpdate: ({ set }: any) => ({
-          returning: async (selection: any) => {
+        onConflictDoUpdate: ({ set, setWhere }: any) => ({
+          returning: async () => {
             const countRendered = dialect.sqlToQuery(set.count);
-            const allowedRendered = dialect.sqlToQuery(selection.allowed);
-            const statementsPush: CapturedStatement = {
+            const whereRendered = dialect.sqlToQuery(setWhere);
+            statements.push({
               values,
               setCountSql: countRendered.sql,
               setCountParams: countRendered.params,
               setOther: set,
-              allowedSql: allowedRendered.sql,
-              allowedParams: allowedRendered.params,
-            };
-            statements.push(statementsPush);
+              setWhereSql: whereRendered.sql,
+              setWhereParams: whereRendered.params,
+            });
 
-            // The cap travels as a bind param in the returned `allowed` expression.
-            const cap = Number(allowedRendered.params[0]);
+            // The cap travels as the last bind param of the guard expression.
+            const cap = Number(whereRendered.params[whereRendered.params.length - 1]);
             const key = `${values.userId}:${values.action}`;
             const existing = store.get(key);
 
             if (!existing) {
               // INSERT path: the row is created with count 1 inside the current window.
               store.set(key, { ...values });
-              return [{ count: 1, windowEnd: values.windowEnd, allowed: 1 <= cap }];
+              return [{ count: 1, windowEnd: values.windowEnd }];
             }
 
-            // The counter advances unconditionally; `allowed` reads the post-update value.
             const expired = existing.windowEnd.getTime() <= values.updatedAt.getTime();
-            const storedCount = expired ? 1 : existing.count + 1;
+            // The guard fails => the row is left untouched and no row comes back.
+            if (!expired && existing.count >= cap) return [];
 
             store.set(key, {
               ...existing,
-              count: storedCount,
+              count: expired ? 1 : existing.count + 1,
               windowStart: expired ? values.windowStart : existing.windowStart,
               windowEnd: expired ? values.windowEnd : existing.windowEnd,
               updatedAt: values.updatedAt,
             });
 
-            return [
-              {
-                count: Math.min(storedCount, cap),
-                windowEnd: existing.windowEnd,
-                allowed: storedCount <= cap,
-              },
-            ];
+            const row = store.get(key);
+            return [{ count: row.count, windowEnd: row.windowEnd }];
           },
         }),
       }),
@@ -183,7 +180,7 @@ describe("consumeCounter", () => {
     expect(store.get("user-1:chat").count).toBe(25);
   });
 
-  it("rejects once the counter passes maxRequests without granting another slot", async () => {
+  it("rejects without writing once the counter is full", async () => {
     const now = new Date();
     const { db, store } = createStubDb({
       "user-1:chat": {
@@ -206,9 +203,39 @@ describe("consumeCounter", () => {
     });
 
     expect(result.allowed).toBe(false);
-    // Reported usage keeps meaning "consumed", so the rejection does not inflate it.
     expect(result.count).toBe(25);
-    expect(store.get("user-1:chat").count).toBe(26);
+    // The stored counter counts consumed units only. A rejection leaves it alone, so a later
+    // rollback of a real consumption refunds exactly that slot instead of being swallowed here.
+    expect(store.get("user-1:chat").count).toBe(25);
+  });
+
+  it("keeps rejected attempts out of the stored counter under repeated hammering", async () => {
+    const now = new Date();
+    const { db, store } = createStubDb({
+      "user-1:chat": {
+        userId: "user-1",
+        action: "chat",
+        count: 25,
+        windowStart: now,
+        windowEnd: new Date(now.getTime() + 60000),
+        updatedAt: now,
+      },
+    });
+
+    for (let i = 0; i < 5; i++) {
+      const result = await consumeCounter(db, {
+        userId: "user-1",
+        action: "chat",
+        maxRequests: 25,
+        windowStart: now,
+        windowEnd: new Date(now.getTime() + 60000),
+        now,
+      });
+      expect(result.allowed).toBe(false);
+    }
+
+    // getPlanUsage reads this column directly, so an attempt count here would be reported as usage.
+    expect(store.get("user-1:chat").count).toBe(25);
   });
 
   it("starts a fresh window when the stored window has expired", async () => {
@@ -240,7 +267,7 @@ describe("consumeCounter", () => {
     expect(store.get("user-1:chat").windowEnd.getTime()).toBeGreaterThan(now.getTime());
   });
 
-  it("encodes the window reset and the limit in one statement", async () => {
+  it("guards the update instead of clamping the stored count", async () => {
     const { db, statements } = createStubDb();
 
     await consumeCounter(db, {
@@ -251,12 +278,11 @@ describe("consumeCounter", () => {
       windowEnd: new Date(Date.now() + 60000),
     });
 
-    const sqlText = statements[0].setCountSql;
-    expect(sqlText).toContain('"rate_limits"."window_end" <=');
-    expect(sqlText).toContain('"rate_limits"."count" + 1');
-    // The cap travels as a bind param, so the same statement is reused for every limit.
-    expect(statements[0].allowedParams).toContain(7);
-    expect(statements[0].allowedSql).toContain('"rate_limits"."count" <=');
+    expect(statements[0].setCountSql).toContain('"rate_limits"."window_end" <=');
+    expect(statements[0].setCountSql).toContain('"rate_limits"."count" + 1');
+    // The cap travels as a bind param in the DO UPDATE guard, so one statement serves every limit.
+    expect(statements[0].setWhereParams).toContain(7);
+    expect(statements[0].setWhereSql).toContain('"rate_limits"."count" <');
   });
 });
 
@@ -300,7 +326,10 @@ describe("checkRateLimit", () => {
 
     expect(result.allowed).toBe(false);
     expect(result.remaining).toBe(0);
-    expect(result.resetAt).toBe(futureWindow.getTime());
+    // A rejected request writes nothing, so its `windowEnd` is the caller's requested one, which is
+    // an upper bound on the stored window's end. `Retry-After` is therefore never too short.
+    expect(result.resetAt).toBeGreaterThanOrEqual(futureWindow.getTime());
+    expect(result.resetAt).toBeLessThanOrEqual(futureWindow.getTime() + 60000);
   });
 
   it("resets the window when the existing window has expired", async () => {

@@ -76,40 +76,34 @@ describe("Plan Entitlements Subsystem", () => {
             return {
               // Mirrors the real atomic counter: `ON CONFLICT DO UPDATE ... RETURNING` evaluates
               // against the updated row and hands back the post-update values.
-              onConflictDoUpdate: vi.fn().mockImplementation(() => {
+              onConflictDoUpdate: vi.fn().mockImplementation(({ setWhere }: any) => {
                 return {
-                  returning: vi.fn().mockImplementation(async (selection: any) => {
-                    // Read the cap out of the rendered RETURNING expression so this mock cannot
-                    // drift from the SQL the implementation actually sends.
-                    const cap = Number(dialect.sqlToQuery(selection.allowed).params[0]);
+                  returning: vi.fn().mockImplementation(async () => {
+                    // Read the cap out of the rendered DO UPDATE guard so this mock cannot drift
+                    // from the SQL the implementation actually sends.
+                    const guard = dialect.sqlToQuery(setWhere);
+                    const cap = Number(guard.params[guard.params.length - 1]);
 
                     const existing = mockRateLimits.find(
                       (r) => r.userId === val.userId && r.action === val.action,
                     );
                     if (!existing) {
                       mockRateLimits.push({ ...val });
-                      return [{ ...val, count: 1, allowed: 1 <= cap }];
+                      return [{ ...val, count: 1 }];
                     }
 
-                    // The counter advances unconditionally; `allowed` reads the post-update value.
                     const expired = existing.windowEnd.getTime() <= val.updatedAt.getTime();
-                    const storedCount = expired ? 1 : existing.count + 1;
-                    const allowed = storedCount <= cap;
+                    // `DO UPDATE ... WHERE false` writes nothing and returns no row.
+                    if (!expired && existing.count >= cap) return [];
 
                     Object.assign(existing, {
-                      count: storedCount,
+                      count: expired ? 1 : existing.count + 1,
                       windowStart: expired ? val.windowStart : existing.windowStart,
                       windowEnd: expired ? val.windowEnd : existing.windowEnd,
                       updatedAt: val.updatedAt,
                     });
 
-                    return [
-                      {
-                        count: Math.min(storedCount, cap),
-                        windowEnd: existing.windowEnd,
-                        allowed,
-                      },
-                    ];
+                    return [{ count: existing.count, windowEnd: existing.windowEnd }];
                   }),
                 };
               }),
@@ -542,8 +536,9 @@ describe("Plan Entitlements Subsystem", () => {
       // updated row, so the pre-update `count < max` test evaluated 25 < 25 and rejected it.
       expect(allowed).toBe(1);
       expect(rejected).toBe(2);
-      // Rejected requests overshoot the stored counter but never inflate reported usage.
-      expect(mockRateLimits[0].count).toBe(27);
+      // Rejected requests write nothing, so the stored counter stays at consumed units. A later
+      // rollback therefore refunds a real slot instead of being swallowed by a rejected attempt.
+      expect(mockRateLimits[0].count).toBe(25);
       expect(results.every((r) => r.count === 25)).toBe(true);
     });
 
@@ -562,7 +557,7 @@ describe("Plan Entitlements Subsystem", () => {
       expect(results.filter((r) => r.allowed).length).toBe(3);
       expect(results.filter((r) => !r.allowed).length).toBe(2);
       expect(mockRateLimits).toHaveLength(1);
-      expect(mockRateLimits[0].count).toBe(5);
+      expect(mockRateLimits[0].count).toBe(3);
     });
   });
 

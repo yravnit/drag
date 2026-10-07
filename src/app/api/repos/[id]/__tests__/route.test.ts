@@ -12,27 +12,39 @@ vi.mock("@/lib/auth/server", () => ({
 /** Associations still present when the count is taken inside the transaction. */
 let mockRemainingAssociations = 1;
 
-vi.mock("@/db/db", () => {
+vi.mock("@/db/db", async () => {
   // Captures the ordering of writes inside the transaction, which is the whole point of the fix:
   // the count must be re-read after the delete, while the row lock is held.
   const calls: string[] = [];
+  const { repositories, userRepositories } = await import("@/db/schema");
 
   const tx = {
-    select: vi.fn(() => ({
-      from: vi.fn(() => ({
-        where: vi.fn(() => ({
-          for: vi.fn(async () => {
-            calls.push("lock");
-            return [{ id: "repo-1" }];
-          }),
-          // The count select awaits directly rather than through .for()
-          then: (resolve: any) =>
-            Promise.resolve().then(() => {
+    // Two distinct shapes, matching the route: the row lock selects `repositories` and goes
+    // through `.for("update")`, the recount selects `user_repositories` and is awaited directly.
+    // Branching on the table keeps both real promises instead of one thenable serving both.
+    select: vi.fn((fields: unknown) => ({
+      from: vi.fn((table: unknown) => {
+        if (table === repositories) {
+          return {
+            where: vi.fn(() => ({
+              for: vi.fn(async () => {
+                calls.push("lock");
+                return [{ id: "repo-1" }];
+              }),
+            })),
+          };
+        }
+        if (table === userRepositories) {
+          void fields;
+          return {
+            where: vi.fn(async () => {
               calls.push("count");
-              return resolve([{ value: mockRemainingAssociations }]);
+              return [{ value: mockRemainingAssociations }];
             }),
-        })),
-      })),
+          };
+        }
+        throw new Error("unexpected select source");
+      }),
     })),
     delete: vi.fn(() => ({
       where: vi.fn(async () => {

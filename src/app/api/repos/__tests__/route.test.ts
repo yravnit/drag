@@ -464,7 +464,7 @@ describe("POST /api/repos", () => {
     ]);
   });
 
-  it("does not reuse a URL row that already carries a different github_id", async () => {
+  it("frees a recycled URL from the old row without reusing its identity", async () => {
     mockGetSession.mockResolvedValueOnce({ user: { id: "user-1" } } as any);
     mockGetAccessToken.mockResolvedValueOnce({ accessToken: "token-123" });
     // A new public repository created at a URL an indexed private repository used to occupy.
@@ -491,7 +491,8 @@ describe("POST /api/repos", () => {
       isPrivate: true,
     };
 
-    const inserted: any[] = [];
+    let urlLookups = 0;
+    const updates: any[] = [];
     mockDbSelect.mockImplementation(() => {
       const chain = createSelectChain();
       const originalFrom = chain.from;
@@ -500,14 +501,14 @@ describe("POST /api/repos", () => {
         const isRepositories =
           table?.githubId === "repositories_githubId" || table === "repositories";
         if (!isRepositories) return result;
-        // Both lookups (github id, then URL) find nothing: the URL row is filtered out by
-        // `githubId IS NULL`, so it must never be returned here.
+        // github-id lookup misses; the URL lookup finds the old row.
+        const row = urlLookups++ === 0 ? [] : [staleRow];
         return {
           ...result,
           where: vi.fn().mockReturnValue(
-            Object.assign(Promise.resolve([]), {
-              limit: vi.fn().mockResolvedValue([]),
-              for: vi.fn().mockResolvedValue([]),
+            Object.assign(Promise.resolve(row), {
+              limit: vi.fn().mockResolvedValue(row),
+              for: vi.fn().mockResolvedValue(row),
             }),
           ),
         };
@@ -515,11 +516,19 @@ describe("POST /api/repos", () => {
       return chain;
     });
 
+    const inserted: any[] = [];
     mockDbInsert.mockImplementation(() => ({
       values: vi.fn().mockImplementation((val: any) => {
         inserted.push(val);
         return { returning: vi.fn().mockResolvedValue([{ id: "fresh-row-id" }]) };
       }),
+    }));
+
+    mockDbUpdate.mockImplementation(() => ({
+      set: (values: any) => {
+        updates.push(values);
+        return { where: vi.fn().mockResolvedValue(undefined) };
+      },
     }));
 
     const request = new Request("http://localhost/api/repos", {
@@ -531,11 +540,85 @@ describe("POST /api/repos", () => {
 
     expect(response.status).toBe(200);
     const data = await response.json();
-    // The old row kept its github_id and its private chunks, so it cannot answer the new repo.
+    // A fresh row, not the old one: its github_id, private chunks and `ready` status are intact
+    // and still reachable by github_id, so the new repo cannot be answered from the old source.
     expect(data.repositoryId).toBe("fresh-row-id");
     expect(data.alreadyExists).toBe(false);
     expect(inserted[0]).toMatchObject({ githubId: BigInt(222), isPrivate: false });
-    expect(staleRow.githubId).toBe(BigInt(111));
+    // The old row never gets a new github_id; only its now-wrong URL is released.
+    expect(updates.some((u) => "githubId" in u)).toBe(false);
+    expect(updates.some((u) => typeof u.url === "string" && u.url.includes("#stale-111"))).toBe(true);
+  });
+
+  it("does not touch the URL row when it is a legacy row with a null github_id", async () => {
+    mockGetSession.mockResolvedValueOnce({ user: { id: "user-1" } } as any);
+    mockGetAccessToken.mockResolvedValueOnce({ accessToken: "token-123" });
+    mockGetRepository.mockResolvedValueOnce({
+      id: 777,
+      name: "legacy-repo",
+      owner: { login: "owner" },
+      html_url: "https://github.com/owner/legacy-repo",
+      default_branch: "main",
+      private: false,
+    });
+    mockGetCommit.mockResolvedValueOnce({ sha: "sha-123" });
+    mockGetTree.mockResolvedValueOnce({ tree: [{ type: "blob", size: 10 }], truncated: false });
+
+    const legacy = {
+      id: "legacy-id",
+      githubId: null,
+      embeddingStatus: "ready",
+      name: "legacy-repo",
+      owner: "owner",
+      url: "https://github.com/owner/legacy-repo",
+      defaultBranch: "main",
+    };
+
+    let urlLookups = 0;
+    mockDbSelect.mockImplementation(() => {
+      const chain = createSelectChain();
+      const originalFrom = chain.from;
+      chain.from = vi.fn().mockImplementation((table: any) => {
+        const result = originalFrom(table);
+        const isRepositories =
+          table?.githubId === "repositories_githubId" || table === "repositories";
+        if (!isRepositories) return result;
+        const row = urlLookups++ === 0 ? [] : [legacy];
+        return {
+          ...result,
+          where: vi.fn().mockReturnValue(
+            Object.assign(Promise.resolve(row), {
+              limit: vi.fn().mockResolvedValue(row),
+              for: vi.fn().mockResolvedValue(row),
+            }),
+          ),
+        };
+      });
+      return chain;
+    });
+
+    const updates: any[] = [];
+    mockDbUpdate.mockImplementation(() => ({
+      set: (values: any) => {
+        updates.push(values);
+        return { where: vi.fn().mockResolvedValue(undefined) };
+      },
+    }));
+
+    const request = new Request("http://localhost/api/repos", {
+      method: "POST",
+      body: JSON.stringify({ url: "https://github.com/owner/legacy-repo" }),
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    // A legacy row is genuinely the same repository, so it is adopted and its URL left alone.
+    expect(data.repositoryId).toBe("legacy-id");
+    expect(data.alreadyExists).toBe(true);
+    expect(updates.some((u) => "githubId" in u && u.githubId === BigInt(777))).toBe(true);
+    expect(updates.some((u) => "url" in u)).toBe(false);
   });
 
   it("falls back to the URL when a legacy row has no github_id and backfills it", async () => {

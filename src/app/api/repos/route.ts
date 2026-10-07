@@ -286,19 +286,40 @@ export async function POST(request: Request) {
     // public one created at the same path). Reusing it would swap the row's GitHub ID while keeping
     // the old private source's chunks and `ready` status, so the new public repo would be answered
     // from the previous owner's code.
+    //
+    // That row still occupies the unique `url` column, so the insert below would fail on the
+    // constraint. Release the URL from the *old* row rather than touching its identity: the old
+    // repository keeps its `github_id`, chunks, conversations and associations, and is still
+    // reachable by `github_id` (which is how sync, ingestion and access checks all find it). Only
+    // the URL that now belongs to a different repository is freed.
     let existing = existingByGithubId;
     if (!existing) {
-      const [existingByUrl] = await db
+      const [urlRow] = await db
         .select()
         .from(repositories)
-        .where(and(eq(repositories.url, meta.html_url), isNull(repositories.githubId)))
+        .where(eq(repositories.url, meta.html_url))
         .limit(1);
-      if (existingByUrl) {
+
+      if (urlRow?.githubId === null) {
+        // Legacy row: adopt it and backfill the id so it is findable by github id from now on.
         await db
           .update(repositories)
           .set({ githubId, updatedAt: new Date() })
-          .where(eq(repositories.id, existingByUrl.id));
-        existing = { ...existingByUrl, githubId };
+          .where(eq(repositories.id, urlRow.id));
+        existing = { ...urlRow, githubId };
+      } else if (urlRow) {
+        // A different repository already sits on this URL. Free the unique slot from the old row
+        // only: its github_id, chunks, conversations and associations are untouched, and it stays
+        // reachable by github_id, which is how sync, ingestion and access checks find it. Appending
+        // the id keeps the old URL on the row for debugging. The only cost is that Retry on that
+        // row now fails URL parsing, which it would anyway: GitHub no longer serves it there.
+        await db
+          .update(repositories)
+          .set({
+            url: `${meta.html_url}#stale-${urlRow.githubId.toString()}`,
+            updatedAt: new Date(),
+          })
+          .where(eq(repositories.id, urlRow.id));
       }
     }
 
