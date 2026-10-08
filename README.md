@@ -176,12 +176,3 @@ npm run build
 ```
 
 ---
-
-## Known limitations
-
-1. **Single-repository chat scope.** Chat sessions query one repository at a time. Cross-repository queries across separate projects are not supported.
-2. **GitHub OAuth app scope.** DRAG uses standard OAuth apps with user consent (either Public-only or Full access). Fine-grained GitHub App bot installations are not currently used.
-3. **Repository access-cache policy.** GitHub permissions are cached for one hour to prevent hitting GitHub API rate limits. If access is revoked on GitHub, access in DRAG revokes after the cache entry expires or when the user deletes the repository from their workspace.
-4. **Repository size constraints.** Repository size, file count, and branch are limited per plan and enforced server-side before ingestion, so the limits scale with the account rather than being fixed at 5,000 files / 250 MB.
-5. **Split embedding providers.** Embeddings are privacy-routed: Gemini `gemini-embedding-2` for public repositories and Cloudflare Workers AI `@cf/qwen/qwen3-embedding-0.6b` for private ones, both at 768 dimensions. Completions use NVIDIA NIM. There is no cross-provider fallback, so a missing or rate-limited key for one visibility class fails indexing for that class rather than degrading. Chat completions remain pinned to NVIDIA; `LLM_BASE_URL` can point at a self-hosted NIM container, but the embedding base URL is not configurable.
-6. **Benchmark scope.** `npm run eval:e2e` generates answers deterministically from retrieved chunks, so it measures retrieval quality and evaluator agreement only. It does not exercise the chat system prompt or the LLM; those need a live-model run.
