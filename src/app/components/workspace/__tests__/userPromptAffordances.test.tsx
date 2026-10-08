@@ -97,6 +97,44 @@ describe("user prompt affordances", () => {
     expect(onEdit).toHaveBeenCalledWith("What does OwnerRepository do?", "m1");
   });
 
+  it("disables the edit button while message has a temporary id", () => {
+    mount(
+      <MessageBubble
+        message={{ ...userMsg("What does OwnerRepository do?"), id: "temp-u-1234" }}
+        onCitationClick={() => {}}
+      />,
+    );
+    const editBtn = container?.querySelector<HTMLButtonElement>('button[title="Cannot edit while message is sending"]');
+    expect(editBtn).toBeTruthy();
+    expect(editBtn?.disabled).toBe(true);
+  });
+
+  it("disables saving when edited message is empty or whitespace", () => {
+    mount(
+      <MessageBubble
+        message={userMsg("Initial prompt")}
+        onCitationClick={() => {}}
+      />,
+    );
+    const editBtn = container?.querySelector<HTMLButtonElement>('button[title="Edit message"]');
+    act(() => {
+      editBtn?.click();
+    });
+    const textarea = container?.querySelector<HTMLTextAreaElement>("textarea");
+    expect(textarea).toBeTruthy();
+    act(() => {
+      const nativeSetter = Object.getOwnPropertyDescriptor(
+        window.HTMLTextAreaElement.prototype,
+        "value",
+      )?.set;
+      nativeSetter?.call(textarea, "   ");
+      textarea!.dispatchEvent(new Event("input", { bubbles: true }));
+      textarea!.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    const saveBtn = buttonByText("Save") as HTMLButtonElement | undefined;
+    expect(saveBtn?.disabled).toBe(true);
+  });
+
   it("cancels in-place editing and restores prompt view", () => {
     mount(
       <MessageBubble

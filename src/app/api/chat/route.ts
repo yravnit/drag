@@ -40,11 +40,22 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Malformed JSON body" }, { status: 400 });
     }
 
-    const { conversationId, message, isRetry, retryMessageId, model, responseMode: rawMode } = body as {
+    const {
+      conversationId,
+      message,
+      isRetry,
+      retryMessageId,
+      isRegenerate,
+      regenerateMessageId,
+      model,
+      responseMode: rawMode,
+    } = body as {
       conversationId?: unknown;
       message?: unknown;
       isRetry?: unknown;
       retryMessageId?: unknown;
+      isRegenerate?: unknown;
+      regenerateMessageId?: unknown;
       model?: unknown;
       responseMode?: unknown;
     };
@@ -53,6 +64,13 @@ export async function POST(request: Request) {
     }
     if (typeof message !== "string" || !message.trim()) {
       return NextResponse.json({ error: "Missing message" }, { status: 400 });
+    }
+
+    if (isRegenerate === true && (typeof regenerateMessageId !== "string" || !regenerateMessageId.trim())) {
+      return NextResponse.json(
+        { error: "regenerateMessageId is required when isRegenerate is true." },
+        { status: 400 },
+      );
     }
 
     const responseMode =
@@ -124,6 +142,8 @@ export async function POST(request: Request) {
         message,
         isRetry: typeof isRetry === "boolean" ? isRetry : undefined,
         retryMessageId: typeof retryMessageId === "string" ? retryMessageId : undefined,
+        isRegenerate: typeof isRegenerate === "boolean" ? isRegenerate : undefined,
+        regenerateMessageId: typeof regenerateMessageId === "string" ? regenerateMessageId : undefined,
         model: typeof model === "string" && model.trim() ? model.trim() : undefined,
         responseMode,
         getGithubToken: () =>

@@ -1,6 +1,6 @@
 import { db, Database } from "@/db/db";
-import { conversations, messages, repositories } from "@/db/schema";
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { conversations, messages, repositories, type Message } from "@/db/schema";
+import { and, desc, eq, isNull, lt, lte } from "drizzle-orm";
 import { verifyRepositoryAccess } from "@/lib/access/repositoryAccess";
 import { retrieveChunks, RetrievedChunk } from "@/lib/retrieval/retriever";
 import { assembleContext } from "@/lib/retrieval/contextAssembler";
@@ -60,6 +60,8 @@ export async function answerConversation(
     message: string;
     isRetry?: boolean;
     retryMessageId?: string;
+    isRegenerate?: boolean;
+    regenerateMessageId?: string;
     model?: string;
     responseMode?: "precise" | "detailed" | "explain_simply";
     getGithubToken: () => Promise<string | null | undefined>;
@@ -106,15 +108,63 @@ export async function answerConversation(
     };
   }
 
+  // If regenerating, locate the authorized target assistant message and its preceding user prompt
+  let targetAssistantMsg: Message | null = null;
+  let targetUserMsg: Message | null = null;
+  if (input.isRegenerate && input.regenerateMessageId) {
+    const [found] = await deps.database
+      .select()
+      .from(messages)
+      .where(
+        and(
+          eq(messages.id, input.regenerateMessageId),
+          eq(messages.conversationId, conversationId),
+          eq(messages.role, "assistant"),
+        ),
+      )
+      .limit(1);
+
+    if (!found) {
+      return { ok: false, status: 404, error: "Message to regenerate not found" };
+    }
+    targetAssistantMsg = found;
+
+    const [foundUser] = await deps.database
+      .select()
+      .from(messages)
+      .where(
+        and(
+          eq(messages.conversationId, conversationId),
+          eq(messages.role, "user"),
+          lte(messages.createdAt, targetAssistantMsg.createdAt),
+        ),
+      )
+      .orderBy(desc(messages.createdAt))
+      .limit(1);
+    targetUserMsg = foundUser ?? null;
+  }
+
   // 3. Query conversation history for previous completed messages (limit to 10 for context)
   // Fetch prior history BEFORE inserting the current message to prevent duplication in model input
+  const historyConditions = [
+    eq(messages.conversationId, conversationId),
+    eq(messages.status, "completed"),
+  ];
+
+  if (targetUserMsg) {
+    // Only completed messages strictly prior to this user prompt
+    historyConditions.push(lt(messages.createdAt, targetUserMsg.createdAt));
+  } else if (targetAssistantMsg) {
+    historyConditions.push(lt(messages.createdAt, targetAssistantMsg.createdAt));
+  }
+
   const history = await deps.database
     .select({
       role: messages.role,
       content: messages.content,
     })
     .from(messages)
-    .where(and(eq(messages.conversationId, conversationId), eq(messages.status, "completed")))
+    .where(and(...historyConditions))
     .orderBy(desc(messages.createdAt))
     .limit(10);
 
@@ -123,7 +173,7 @@ export async function answerConversation(
 
   // Nothing completed precedes this turn, so it opens the conversation. That is the only moment a
   // model-generated title makes sense; every later turn reuses it.
-  const isFirstMessage = !input.isRetry && history.length === 0;
+  const isFirstMessage = !input.isRetry && !input.isRegenerate && history.length === 0;
 
   // Fired here, before retrieval and before the answer stream exists, because the title only needs
   // the opening question and not the answer. Racing from t=0 means it is normally finished long
@@ -157,8 +207,8 @@ export async function answerConversation(
     }
   }
 
-  // 4. Insert User Message (skipped during retry to prevent duplicate user messages)
-  if (!input.isRetry) {
+  // 4. Insert User Message (skipped during retry or regenerate to prevent duplicate user messages)
+  if (!input.isRetry && !input.isRegenerate) {
     await deps.database
       .insert(messages)
       .values({
@@ -187,16 +237,32 @@ export async function answerConversation(
       );
   }
 
-  // 5. Insert Assistant Message with status "streaming"
-  const [assistantMsg] = await deps.database
-    .insert(messages)
-    .values({
-      conversationId,
-      role: "assistant",
-      content: "",
-      status: "streaming",
-    })
-    .returning();
+  // 5. Insert Assistant Message with status "streaming", or replace target answer on regenerate
+  let assistantMsg: Message;
+  if (targetAssistantMsg) {
+    const [updated] = await deps.database
+      .update(messages)
+      .set({
+        content: "",
+        status: "streaming",
+        citations: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(messages.id, targetAssistantMsg.id))
+      .returning();
+    assistantMsg = updated;
+  } else {
+    const [inserted] = await deps.database
+      .insert(messages)
+      .values({
+        conversationId,
+        role: "assistant",
+        content: "",
+        status: "streaming",
+      })
+      .returning();
+    assistantMsg = inserted;
+  }
 
   // 6. Generate embedding
   let queryEmbedding: number[];

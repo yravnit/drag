@@ -106,6 +106,7 @@ export default function Home() {
   const [planUsage, setPlanUsage] = useState<PlanUsageData | null>(null);
   const [isPlanModalOpen, setIsPlanModalOpen] = useState(false);
   const [selectedModel, setSelectedModel] = useState<string>("default");
+  const [isModelManuallyPicked, setIsModelManuallyPicked] = useState(false);
   const [responseMode, setResponseMode] = useState<ResponseMode>("precise");
 
 // Monotonic request ids, one per independently-cancelled load. Selecting a repository or thread
@@ -825,28 +826,176 @@ export default function Home() {
     setMessageText(prompt);
   }, []);
 
-  const handleEditMessage = useCallback(
-    async (content: string, messageId?: string) => {
-      const trimmed = content.trim();
-      if (!trimmed) return;
-      if (messageId) {
-        setMessagesList((prev) =>
-          prev.map((msg) => (msg.id === messageId ? { ...msg, content: trimmed } : msg)),
-        );
-        if (selectedConversation && !messageId.startsWith("temp-")) {
-          try {
-            await fetch(`/api/conversations/${selectedConversation.id}/messages`, {
-              method: "PATCH",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ messageId, content: trimmed }),
-            });
-          } catch (err) {
-            console.error("Failed to persist edited message:", err);
+  const handleRegenerateMessage = useCallback(
+    async (targetMsg: ChatMessage) => {
+      if (!selectedConversation || isStreaming) return;
+
+      const targetIdx = messagesList.findIndex((m) => m.id === targetMsg.id);
+      let promptToRegenerate = "";
+      if (targetIdx > 0 && messagesList[targetIdx - 1].role === "user") {
+        promptToRegenerate = messagesList[targetIdx - 1].content;
+      } else {
+        for (let i = targetIdx - 1; i >= 0; i--) {
+          if (messagesList[i].role === "user") {
+            promptToRegenerate = messagesList[i].content;
+            break;
           }
         }
       }
+
+      if (!promptToRegenerate) return;
+
+      const conversationId = selectedConversation.id;
+      const requestId = nextMessagesRequestId();
+
+      setIsStreaming(true);
+      setChatError("");
+      setMessagesList((prev) =>
+        prev.map((msg) =>
+          msg.id === targetMsg.id
+            ? { ...msg, status: "streaming", content: "", citations: [] }
+            : msg,
+        ),
+      );
+
+      try {
+        const res = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            conversationId,
+            message: promptToRegenerate,
+            isRegenerate: true,
+            regenerateMessageId: targetMsg.id,
+            model: selectedModel !== "default" ? selectedModel : undefined,
+            responseMode,
+          }),
+        });
+
+        if (!res.ok) {
+          const data = await res.json().catch(() => null);
+          const isQuota =
+            res.status === 429 &&
+            (data?.code === "MONTHLY_QUOTA_EXCEEDED" ||
+              (typeof data?.error === "string" &&
+                data.error.toLowerCase().includes("monthly rag query quota")));
+          const errText = isQuota
+            ? "You've reached your monthly RAG query limit."
+            : (data?.error || "Generation retry failed");
+
+          setChatError(errText);
+          if (requestId !== messagesRequestIdRef.current) return;
+          setMessagesList((prev) =>
+            prev.map((msg) =>
+              msg.id === targetMsg.id
+                ? { ...msg, status: "failed", content: errText }
+                : msg,
+            ),
+          );
+          setIsStreaming(false);
+          return;
+        }
+
+        const reader = res.body?.getReader();
+        if (!reader) throw new Error("No reader on response stream");
+
+        const decoder = new TextDecoder();
+        let streamText = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const textChunk = decoder.decode(value, { stream: true });
+          streamText += textChunk;
+
+          if (requestId !== messagesRequestIdRef.current) continue;
+          setMessagesList((prev) =>
+            prev.map((msg) =>
+              msg.id === targetMsg.id ? { ...msg, content: streamText } : msg,
+            ),
+          );
+        }
+
+        await loadMessages(conversationId, requestId);
+        loadPlanUsage();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "";
+        console.error("Chat regenerate error:", err);
+        if (requestId !== messagesRequestIdRef.current) return;
+        setChatError(message || "An unexpected error occurred during regeneration");
+        setMessagesList((prev) =>
+          prev.map((msg) =>
+            msg.id === targetMsg.id
+              ? { ...msg, status: "failed", content: message || "Network connection interrupted" }
+              : msg,
+          ),
+        );
+      } finally {
+        setIsStreaming(false);
+      }
     },
-    [selectedConversation],
+    [
+      selectedConversation,
+      isStreaming,
+      messagesList,
+      selectedModel,
+      responseMode,
+      nextMessagesRequestId,
+      loadMessages,
+      loadPlanUsage,
+    ],
+  );
+
+  const handleEditMessage = useCallback(
+    async (content: string, messageId?: string) => {
+      const trimmed = content.trim();
+      if (!trimmed || !messageId) return;
+      if (messageId.startsWith("temp-")) return;
+      if (trimmed.length > MAX_CHAT_MESSAGE_LENGTH) {
+        setChatError(
+          `Message exceeds maximum allowed length of ${MAX_CHAT_MESSAGE_LENGTH} characters.`,
+        );
+        return;
+      }
+
+      const previousMessage = messagesList.find((msg) => msg.id === messageId);
+      const originalContent = previousMessage?.content ?? "";
+
+      setMessagesList((prev) =>
+        prev.map((msg) => (msg.id === messageId ? { ...msg, content: trimmed } : msg)),
+      );
+
+      if (selectedConversation) {
+        try {
+          const res = await fetch(`/api/conversations/${selectedConversation.id}/messages`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ messageId, content: trimmed }),
+          });
+
+          if (!res.ok) {
+            const data = await res.json().catch(() => null);
+            const errText = data?.error || `Failed to save edited message (${res.status})`;
+            setChatError(errText);
+            setMessagesList((prev) =>
+              prev.map((msg) =>
+                msg.id === messageId ? { ...msg, content: originalContent } : msg,
+              ),
+            );
+          }
+        } catch (err) {
+          console.error("Failed to persist edited message:", err);
+          setChatError("Network error: Failed to save edited message");
+          setMessagesList((prev) =>
+            prev.map((msg) =>
+              msg.id === messageId ? { ...msg, content: originalContent } : msg,
+            ),
+          );
+        }
+      }
+    },
+    [selectedConversation, messagesList],
   );
 
   const handleCloseCitation = useCallback(() => setCitationDetail(null), []);
@@ -1078,6 +1227,7 @@ export default function Home() {
       onSuggestionClick={handleSuggestionClick}
       onEditMessage={handleEditMessage}
       onRetryMessage={handleRetryMessage}
+      onRegenerateMessage={handleRegenerateMessage}
       accessMode={userAccessMode}
       onUpgradeAccess={handleUpgradeAccess}
       planUsage={planUsage}
@@ -1086,6 +1236,8 @@ export default function Home() {
       onClosePlanModal={handleClosePlanModal}
       selectedModel={selectedModel}
       onSelectModel={setSelectedModel}
+      manuallyPickedModel={isModelManuallyPicked}
+      onManualPickModel={() => setIsModelManuallyPicked(true)}
       responseMode={responseMode}
       onResponseModeChange={setResponseMode}
       />

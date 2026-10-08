@@ -13,6 +13,7 @@ interface MessageListProps {
   onSuggestionClick?: (prompt: string) => void;
   onEditMessage?: (content: string, messageId?: string) => void;
   onRetryMessage?: (message: ChatMessage) => void;
+  onRegenerateMessage?: (message: ChatMessage) => void;
 }
 
 const PIN_THRESHOLD_PX = 80;
@@ -31,6 +32,7 @@ function MessageListImpl({
   onSuggestionClick,
   onEditMessage,
   onRetryMessage,
+  onRegenerateMessage,
 }: MessageListProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const isNearBottomRef = useRef(true);
@@ -136,7 +138,12 @@ function MessageListImpl({
           key={msg.id}
           message={msg}
           onCitationClick={onCitationClick}
-          onRetry={onRetryMessage ? () => onRetryMessage(msg) : undefined}
+          onRetry={msg.status === "failed" && onRetryMessage ? () => onRetryMessage(msg) : undefined}
+          onRegenerate={
+            msg.status === "completed" && onRegenerateMessage
+              ? () => onRegenerateMessage(msg)
+              : undefined
+          }
           onEdit={onEditMessage ? (content, id) => onEditMessage(content, id) : undefined}
         />
       ))}

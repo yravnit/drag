@@ -71,6 +71,7 @@ export interface WorkspaceShellProps {
   onSuggestionClick?: (prompt: string) => void;
   onEditMessage?: (content: string, messageId?: string) => void;
   onRetryMessage?: (message: ChatMessage) => void;
+  onRegenerateMessage?: (message: ChatMessage) => void;
   accessMode?: "public" | "full";
   onUpgradeAccess?: () => void;
   planUsage?: PlanUsageData | null;
@@ -79,6 +80,8 @@ export interface WorkspaceShellProps {
   onClosePlanModal?: () => void;
   selectedModel?: string;
   onSelectModel?: (modelId: string) => void;
+  manuallyPickedModel?: boolean;
+  onManualPickModel?: () => void;
   responseMode?: ResponseMode;
   onResponseModeChange?: (mode: ResponseMode) => void;
 }
@@ -129,6 +132,7 @@ export function WorkspaceShell({
   onSuggestionClick,
   onEditMessage,
   onRetryMessage,
+  onRegenerateMessage,
   accessMode,
   onUpgradeAccess,
   planUsage,
@@ -137,6 +141,8 @@ export function WorkspaceShell({
   onClosePlanModal,
   selectedModel = "default",
   onSelectModel,
+  manuallyPickedModel,
+  onManualPickModel,
   responseMode = "precise",
   onResponseModeChange,
 }: WorkspaceShellProps) {
@@ -312,8 +318,11 @@ export function WorkspaceShell({
                 onSuggestionClick={onSuggestionClick}
                 onEditMessage={onEditMessage}
                 onRetryMessage={onRetryMessage}
+                onRegenerateMessage={onRegenerateMessage}
                 selectedModel={selectedModel}
                 onSelectModel={onSelectModel}
+                manuallyPickedModel={manuallyPickedModel}
+                onManualPickModel={onManualPickModel}
                 responseMode={responseMode}
                 onResponseModeChange={onResponseModeChange}
               />

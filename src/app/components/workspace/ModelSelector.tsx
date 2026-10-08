@@ -10,6 +10,8 @@ interface ModelSelectorProps {
   onSelectModel: (modelId: string) => void;
   defaultModelName?: string;
   dropdownPlacement?: "up" | "down";
+  manuallyPicked?: boolean;
+  onManualPick?: () => void;
 }
 
 /** Picks the verified model with the lowest probe latency; null when no model reports one. */
@@ -26,11 +28,15 @@ export function ModelSelector({
   onSelectModel,
   defaultModelName = "Default LLM",
   dropdownPlacement = "down",
+  manuallyPicked: manuallyPickedProp,
+  onManualPick,
 }: ModelSelectorProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [nvidiaModels, setNvidiaModels] = useState<NvidiaModelOption[]>([]);
   const [loading, setLoading] = useState(false);
-  const manuallyPicked = useRef(false);
+  const [internalManuallyPicked, setInternalManuallyPicked] = useState(false);
+  const isManuallyPicked =
+    manuallyPickedProp !== undefined ? manuallyPickedProp : internalManuallyPicked;
   const onSelectModelRef = useRef(onSelectModel);
 
   useEffect(() => {
@@ -52,7 +58,7 @@ export function ModelSelector({
           // The default model is the fastest verified one. A manual pick always wins,
           // and with no latency reported the configured default LLM stays selected.
           const fastest = fastestModel(models);
-          if (fastest && !manuallyPicked.current) {
+          if (fastest && !isManuallyPicked && selectedModel === "default") {
             onSelectModelRef.current(fastest.id);
           }
         }
@@ -67,7 +73,7 @@ export function ModelSelector({
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [isManuallyPicked, selectedModel]);
 
   const isDefault = selectedModel === "default" || !selectedModel;
   const displayLabel = isDefault
@@ -75,6 +81,13 @@ export function ModelSelector({
     : selectedModel.includes("/")
       ? selectedModel.split("/")[1]
       : selectedModel;
+
+  const handleSelect = (modelId: string) => {
+    setInternalManuallyPicked(true);
+    onManualPick?.();
+    onSelectModel(modelId);
+    setIsOpen(false);
+  };
 
   const optionClass = (isSelected: boolean) =>
     cn(
@@ -101,8 +114,8 @@ export function ModelSelector({
           <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)} />
           <div
             className={cn(
-              "absolute right-0 z-50 w-72 animate-zoom-in overflow-hidden rounded-card border border-line bg-page-2 py-1.5 text-xs shadow-pop",
-              dropdownPlacement === "up" ? "bottom-full mb-2" : "mt-1.5",
+              "absolute z-50 w-72 max-w-[calc(100vw-2rem)] animate-zoom-in overflow-hidden rounded-card border border-line bg-page-2 py-1.5 text-xs shadow-pop",
+              dropdownPlacement === "up" ? "bottom-full mb-2 left-0" : "mt-1.5 left-0",
             )}
           >
             <div className="px-3 py-1 text-[10px] font-bold tracking-wider text-ink-4 uppercase">
@@ -110,11 +123,7 @@ export function ModelSelector({
             </div>
             <button
               type="button"
-              onClick={() => {
-                manuallyPicked.current = true;
-                onSelectModel("default");
-                setIsOpen(false);
-              }}
+              onClick={() => handleSelect("default")}
               className={optionClass(isDefault)}
             >
               <span className="min-w-0 truncate">
@@ -146,11 +155,7 @@ export function ModelSelector({
                       <button
                         key={model.id}
                         type="button"
-                        onClick={() => {
-                          manuallyPicked.current = true;
-                          onSelectModel(model.id);
-                          setIsOpen(false);
-                        }}
+                        onClick={() => handleSelect(model.id)}
                         className={optionClass(isSelected)}
                       >
                         <span className="min-w-0 flex-1 pr-2">

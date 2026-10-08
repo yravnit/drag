@@ -34,8 +34,11 @@ interface ChatWindowProps {
   onSuggestionClick?: (prompt: string) => void;
   onEditMessage?: (content: string, messageId?: string) => void;
   onRetryMessage?: (message: ChatMessage) => void;
+  onRegenerateMessage?: (message: ChatMessage) => void;
   selectedModel?: string;
   onSelectModel?: (modelId: string) => void;
+  manuallyPickedModel?: boolean;
+  onManualPickModel?: () => void;
   responseMode?: ResponseMode;
   onResponseModeChange?: (mode: ResponseMode) => void;
 }
@@ -64,8 +67,11 @@ export function ChatWindow({
   onSuggestionClick,
   onEditMessage,
   onRetryMessage,
+  onRegenerateMessage,
   selectedModel = "default",
   onSelectModel,
+  manuallyPickedModel,
+  onManualPickModel,
   responseMode = "precise",
   onResponseModeChange,
 }: ChatWindowProps) {
@@ -284,6 +290,7 @@ export function ChatWindow({
             onSuggestionClick={onSuggestionClick}
             onEditMessage={onEditMessage}
             onRetryMessage={onRetryMessage}
+            onRegenerateMessage={onRegenerateMessage}
           />
 
           <Composer
@@ -296,6 +303,8 @@ export function ChatWindow({
             onSubmit={onSendMessage}
             selectedModel={selectedModel}
             onSelectModel={onSelectModel}
+            manuallyPicked={manuallyPickedModel}
+            onManualPick={onManualPickModel}
           />
         </>
       )}

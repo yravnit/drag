@@ -60,7 +60,18 @@ function makeStubDb(selectQueue: Array<Promise<any[]>>) {
       set: (set: Record<string, unknown>) => ({
         where: (where: unknown) => {
           updates.push({ set, where });
-          return Promise.resolve(undefined);
+          const ret = [
+            {
+              id: "target-assistant-1",
+              createdAt: new Date(),
+              updatedAt: new Date(),
+              citations: null,
+              ...set,
+            },
+          ];
+          return Object.assign(Promise.resolve(undefined), {
+            returning: async () => ret,
+          });
         },
       }),
     }),
@@ -217,5 +228,103 @@ describe("Chat Retry & Idempotency Audit (5D)", () => {
     expect(inserts[0].values.role).toBe("user");
     expect(inserts[1].values.role).toBe("assistant");
     expect(deletes).toHaveLength(0);
+  });
+
+  it("replaces the authorized assistant message and builds history only up to its user prompt", async () => {
+    const t2 = new Date("2026-01-01T00:01:00Z");
+    const t3 = new Date("2026-01-01T00:01:10Z");
+
+    const selectQueue = [
+      Promise.resolve([{ id: "conv-1", repositoryId: "repo-1", userId: "user-1" }]),
+      Promise.resolve([{ id: "repo-1", owner: "octocat", name: "drag" }]),
+      Promise.resolve([{ userId: "user-1", repositoryId: "repo-1", hasAccess: true, verifiedAt: new Date() }]),
+      // 4: target assistant message
+      Promise.resolve([
+        { id: "a-1", conversationId: "conv-1", role: "assistant", status: "completed", createdAt: t3 },
+      ]),
+      // 5: user prompt preceding target assistant message
+      Promise.resolve([
+        { id: "u-1", conversationId: "conv-1", role: "user", content: "What is X?", createdAt: t2 },
+      ]),
+      // 6: history query returns completed messages before u-1 (descending)
+      Promise.resolve([
+        { role: "assistant", content: "Earlier answer" },
+        { role: "user", content: "Earlier question" },
+      ]),
+    ];
+
+    const { db, inserts, deletes, updates } = makeStubDb(selectQueue);
+    let capturedLlmMessages: ChatMessage[] = [];
+
+    const deps: ConversationChatDeps = {
+      database: db as any,
+      embedQuery: async () => [0.1, 0.2, 0.3],
+      retrieve: async () => fixtureChunks,
+      streamLLM: async (messages) => {
+        capturedLlmMessages = messages;
+        return (async function* () {
+          yield "New answer";
+        })();
+      },
+    };
+
+    const result = await answerConversation(deps, {
+      userId: "user-1",
+      conversationId: "conv-1",
+      message: "What is X?",
+      isRegenerate: true,
+      regenerateMessageId: "a-1",
+      getGithubToken: async () => "token-1",
+    });
+
+    expect(result.ok).toBe(true);
+
+    // ZERO inserts: does not insert a new user prompt or an extra assistant bubble
+    expect(inserts).toHaveLength(0);
+    expect(deletes).toHaveLength(0);
+
+    // Replaces the authorized assistant message row in place
+    expect(updates.length).toBeGreaterThanOrEqual(1);
+    expect(updates[0].set.status).toBe("streaming");
+    expect(whereSql(updates[0].where).params).toEqual(["a-1"]);
+
+    // Model history contains earlier turn plus current prompt, no duplication
+    const userRoleMessages = capturedLlmMessages.filter((m) => m.role === "user");
+    expect(userRoleMessages).toHaveLength(2);
+    expect(userRoleMessages[0].content).toBe("Earlier question");
+    expect(userRoleMessages[1].content).toBe("What is X?");
+  });
+
+  it("returns 404 when regenerateMessageId is not found or unauthorized", async () => {
+    const selectQueue = [
+      Promise.resolve([{ id: "conv-1", repositoryId: "repo-1", userId: "user-1" }]),
+      Promise.resolve([{ id: "repo-1", owner: "octocat", name: "drag" }]),
+      Promise.resolve([{ userId: "user-1", repositoryId: "repo-1", hasAccess: true, verifiedAt: new Date() }]),
+      // Target assistant message query returns nothing (not found or unauthorized)
+      Promise.resolve([]),
+    ];
+
+    const { db } = makeStubDb(selectQueue);
+
+    const deps: ConversationChatDeps = {
+      database: db as any,
+      embedQuery: async () => [0.1, 0.2, 0.3],
+      retrieve: async () => fixtureChunks,
+      streamLLM: async () => (async function* () {})(),
+    };
+
+    const result = await answerConversation(deps, {
+      userId: "user-1",
+      conversationId: "conv-1",
+      message: "What is X?",
+      isRegenerate: true,
+      regenerateMessageId: "unauthorized-or-missing-id",
+      getGithubToken: async () => "token-1",
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.status).toBe(404);
+    }
   });
 });

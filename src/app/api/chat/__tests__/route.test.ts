@@ -143,6 +143,23 @@ describe("POST /api/chat", () => {
     expect(mockAnswerConversation).not.toHaveBeenCalled();
   });
 
+  it("returns 400 if isRegenerate is true but regenerateMessageId is missing or empty", async () => {
+    mockGetSession.mockResolvedValueOnce({ user: { id: "user-1" } } as any);
+
+    const response = await POST(
+      makeRequest({
+        conversationId: "conv-1",
+        message: "hello",
+        isRegenerate: true,
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    const data = await response.json();
+    expect(data.error).toContain("regenerateMessageId is required");
+    expect(mockAnswerConversation).not.toHaveBeenCalled();
+  });
+
   it("returns 429 when rate limit is exceeded", async () => {
     mockGetSession.mockResolvedValueOnce({ user: { id: "user-1" } } as any);
     mockCheckRateLimit.mockResolvedValueOnce({
@@ -214,6 +231,35 @@ describe("POST /api/chat", () => {
       { marker: "default-deps" },
       expect.objectContaining({
         responseMode: "explain_simply",
+      }),
+    );
+  });
+
+  it("forwards isRegenerate and regenerateMessageId to answerConversation", async () => {
+    mockGetSession.mockResolvedValueOnce({ user: { id: "user-1" } } as any);
+    mockAnswerConversation.mockResolvedValueOnce({
+      ok: true,
+      stream: new ReadableStream({
+        start(controller) {
+          controller.close();
+        },
+      }),
+    });
+
+    await POST(
+      makeRequest({
+        conversationId: "conv-1",
+        message: "explain",
+        isRegenerate: true,
+        regenerateMessageId: "msg-assistant-1",
+      }),
+    );
+
+    expect(mockAnswerConversation).toHaveBeenCalledWith(
+      { marker: "default-deps" },
+      expect.objectContaining({
+        isRegenerate: true,
+        regenerateMessageId: "msg-assistant-1",
       }),
     );
   });

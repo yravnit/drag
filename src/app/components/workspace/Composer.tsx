@@ -61,6 +61,8 @@ interface ComposerProps {
   onSubmit: (e: React.FormEvent) => void;
   selectedModel?: string;
   onSelectModel?: (modelId: string) => void;
+  manuallyPicked?: boolean;
+  onManualPick?: () => void;
   responseMode?: ResponseMode;
   onResponseModeChange?: (mode: ResponseMode) => void;
 }
@@ -73,6 +75,8 @@ export function Composer({
   onSubmit,
   selectedModel = "default",
   onSelectModel,
+  manuallyPicked,
+  onManualPick,
 }: ComposerProps) {
   // The textarea grows natively via `field-sizing: content`, clamped by `min-h`/`max-h`. The old
   // resize effect set `style.height = "auto"` and read `scrollHeight` on every keystroke, forcing
@@ -122,10 +126,16 @@ export function Composer({
       }
       // Only the new tail is appended, so a growing result list never duplicates the transcript
       // and whatever the user already typed in the textarea is kept.
-      const delta = finals.slice(spokenRef.current.length).trimStart();
-      if (!delta) return;
+      const rawDelta = finals.slice(spokenRef.current.length);
+      if (!rawDelta.trim()) return;
       spokenRef.current = finals;
-      const next = `${textRef.current}${delta}`.slice(0, MAX_CHAT_MESSAGE_LENGTH);
+      const trimmedDelta = rawDelta.trimStart();
+      const currentText = textRef.current;
+      const needsSpace = currentText.length > 0 && !/\s$/.test(currentText);
+      const next = `${currentText}${needsSpace ? " " : ""}${trimmedDelta}`.slice(
+        0,
+        MAX_CHAT_MESSAGE_LENGTH,
+      );
       textRef.current = next;
       onMessageChangeRef.current(next);
     };
@@ -157,11 +167,15 @@ export function Composer({
     };
   }, [recording]);
 
+  const stopRecording = () => {
+    recordingRef.current = false;
+    recognitionRef.current?.stop();
+    setRecording(false);
+  };
+
   const toggleRecording = () => {
     if (recording) {
-      recordingRef.current = false;
-      recognitionRef.current?.stop();
-      setRecording(false);
+      stopRecording();
     } else {
       recordingRef.current = true;
       setRecording(true);
@@ -172,9 +186,19 @@ export function Composer({
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       if (messageText.trim() && !isStreaming) {
+        if (recording) {
+          stopRecording();
+        }
         onSubmit(e as unknown as React.FormEvent);
       }
     }
+  };
+
+  const handleFormSubmit = (e: React.FormEvent) => {
+    if (recording) {
+      stopRecording();
+    }
+    onSubmit(e);
   };
 
   return (
@@ -186,7 +210,7 @@ export function Composer({
         </div>
       )}
 
-      <form onSubmit={onSubmit} className="mx-auto max-w-3xl">
+      <form onSubmit={handleFormSubmit} className="mx-auto max-w-3xl">
         <div className="flex flex-col rounded-card border border-input-line bg-input p-2.5 transition-colors duration-150 focus-within:border-accent focus-within:ring-0">
           <textarea
             rows={2}
@@ -207,6 +231,8 @@ export function Composer({
                   selectedModel={selectedModel}
                   onSelectModel={onSelectModel}
                   dropdownPlacement="up"
+                  manuallyPicked={manuallyPicked}
+                  onManualPick={onManualPick}
                 />
               )}
             </div>
@@ -216,7 +242,7 @@ export function Composer({
                 <button
                   type="button"
                   onClick={toggleRecording}
-                  disabled={isStreaming}
+                  disabled={isStreaming && !recording}
                   aria-pressed={recording}
                   aria-label={recording ? "Stop voice input" : "Voice input"}
                   title={recording ? "Listening…" : "Voice input"}

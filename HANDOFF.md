@@ -491,7 +491,7 @@ DRAG monitors NVIDIA LLM availability automatically without manual model lists.
 - **Build**. `npm run build` succeeds using Next.js 16 and Turbopack.
 - **CI**. `.github/workflows/ci.yml` runs `npm ci`, lint, lint:ox, `tsc --noEmit`, `npm test`, `eval:retrieval`, and `next build` on every push and PR.
 - **Format**. `npm run format:ox` is *not* enforced in CI and currently reports issues across the tree; treat it as advisory and format only the files you touch.
-- **`npm ci` is broken on the committed lockfile.** It aborts with `Missing: @nestjs/common@12.1.2 from lock file` (and ~150 similar entries) on a pristine checkout — the lockfile is internally inconsistent and was already so before 2026-10-06. CI calls `npm ci`, so CI is red for this reason, not because of source changes. Regenerating the lockfile also re-resolves `better-auth` from `^1.6.23` to 1.7.x, which breaks `auth.api.getAccessToken({ providerId })` in five route files with `TS2339`/`TS2769`. Fix by pinning `better-auth` to an exact `1.6.24` and regenerating the lock with `npm install --package-lock-only --legacy-peer-deps` (the plain `npm install` fails `ERESOLVE` on `better-auth`'s optional `drizzle-kit` peer).
+- **`npm ci` and lockfile consistency resolved.** `better-auth` is pinned to exact `1.6.24` in `package.json`, `.npmrc` sets `legacy-peer-deps=true` so npm cleanly resolves Drizzle ORM v1 pre-release peer dependencies, and `package-lock.json` was regenerated with `npm install --package-lock-only`. Both local `npm install` and CI `npm ci` pass without `ERESOLVE` or missing package warnings.
 - **Ad-hoc dependency auditing.** Knip, dependency-cruiser, and vitest coverage were run once as throwaway `--no-save` installs to find dead code; none are project dependencies and none are wired into scripts or CI. See section 10 for the findings and what was removed.
 
 *Last updated: 2026-10-08 (test hardening: `route.test.ts` records the querying `repositories` select alongside each row lock and asserts the URL fallback's lock by ordinal, so the attach transaction's `FOR UPDATE` can no longer make the concurrency assertion pass while the URL lookup is unlocked; verified by deleting the URL lookup's `.for("update")` and watching that one test fail. 568 tests green, `oxlint` clean. The earlier 2026-10-08 round-5 remediation: the URL fallback in `POST /api/repos` compares `github_id` under a row lock instead of freeing a matching row's URL, and `consumeCounter` rejects a non-positive cap before writing; `tsc --noEmit` and both linters clean. The prior 2026-10-06 pass had verified every section against the code: shared-repository branch guard on `/api/workflows/ingest-repository` (409), Mermaid `%%{init}` and frontmatter stripped, genuinely LRU parser cache, `eval:retrieval` thresholds enforced in CI, GitHub token-isolation test rewritten so it can fail, unreadable directories skip instead of aborting ingestion, and the drifted claims in sections 3-7, 9, and 10 corrected)*
@@ -580,7 +580,7 @@ Found with one-off `--no-save` installs of **knip** 6.40.0, **dependency-cruiser
 ### Not changed
 
 - `.well-known/workflow/v1/**/route.js` files are reported as orphans by dependency-cruiser. They are `workflow` SDK build output, gitignored, and registered as real routes in the Next.js build. **Not dead code.**
-- `npm ci` and the lockfile's internal consistency are pre-existing problems, documented in section 9. Left alone deliberately: regenerating the lock re-resolves `better-auth` and breaks five route files.
+- `npm ci` and the lockfile's internal consistency are resolved (pinned `better-auth` to `1.6.24`, added `legacy-peer-deps=true` in `.npmrc`, and regenerated `package-lock.json`).
 
 ---
 
@@ -611,6 +611,33 @@ The following improvements were implemented across workspace components and API 
 - **Message update persistence:** Added `PATCH /api/conversations/[id]/messages` in `src/app/api/conversations/[id]/messages/route.ts` with user authorization checks and unit tests. Updated `src/app/workspace/page.tsx` to optimistically update message state and persist edits to Neon PostgreSQL.
 - **Sidebar width and metadata contrast:** Increased desktop sidebar width in `src/app/components/workspace/Sidebar.tsx` to 304px (and mobile to 325px), allowing search placeholder text and shortcut badges to fit without truncation. Elevated repository metadata contrast in `src/app/components/workspace/RepoList.tsx` by upgrading branch name to `font-mono font-medium text-ink`, size and sync times to `text-ink-2`, and separating with distinct midpoint dots.
 - **Enterprise plan header:** Removed the building icon next to the Enterprise plan header in `src/app/components/workspace/PlanUsageModal.tsx`, aligning it with the clean typography of the Free and Hobby cards.
+
+---
+
+## 14. Workspace chat hardening, regeneration flow, and dynamic edit bubble (2026-10-08)
+
+The following fixes and enhancements were implemented across workspace chat components and backend endpoints:
+
+- **Answer regeneration flow.** `src/lib/chat/conversation.ts` and `src/app/api/chat/route.ts` implement dedicated `isRegenerate` and `regenerateMessageId` parameters. Instead of routing through the failed-answer retry path, regeneration targets the completed assistant message directly. It updates the existing message row in place (`status: "streaming"`, `citations: null`) and queries prior history strictly before the corresponding user prompt (`createdAt < targetUserMsg.createdAt`). This keeps thread ordering stable, prevents duplicate answers, and excludes later turns from the LLM prompt.
+- **Message edit verification and rollback.** `handleEditMessage` in `src/app/workspace/page.tsx` checks the `PATCH` response status. If the network request fails or returns an error status code, it rolls the displayed prompt back to its original saved text and displays an error message.
+- **Temporary message ID protection.** `src/app/components/workspace/MessageBubble.tsx` disables the Edit button while `message.id` starts with `temp-`. This prevents edits while the initial answer streams before the database ID returns.
+- **Shared message length limits.** Enforced `MAX_CHAT_MESSAGE_LENGTH` (4000 characters) in `PATCH /api/conversations/[id]/messages` and on the inline editor in `MessageBubble.tsx`. The inline Save button remains disabled when content is empty or exceeds 4000 characters.
+- **Model selector mobile viewport anchoring.** Anchored the upward model menu in `src/app/components/workspace/ModelSelector.tsx` to `bottom-full mb-2 left-0` with `max-w-[calc(100vw-2rem)]`. The menu stays within the chat column and screen bounds without clipping on small viewports.
+- **Model choice persistence across repository switches.** Lifted `isModelManuallyPicked` state to `src/app/workspace/page.tsx` and threaded it through `WorkspaceShell`, `ChatWindow`, and `Composer`. Switching repositories no longer overwrites a manually chosen model with the fastest probe winner.
+- **Speech recognition controls and boundaries.** Added whitespace boundary detection in `src/app/components/workspace/Composer.tsx` when appending new speech transcripts to existing text. Speech recognition now stops automatically when the form submits, and the Stop button remains clickable during streaming while recording.
+- **Dynamic inline edit bubble sizing.** Replaced the fixed 85% width edit box in `src/app/components/workspace/MessageBubble.tsx` with a CSS grid layout (`min-w-[180px] max-w-[75%]`). An invisible mirror span resizes the container dynamically in both width and height as text changes, matching the bubble appearance and right alignment.
+
+---
+
+## 15. Dependency peer resolution and CI lockfile repair (2026-10-08)
+
+The following fixes resolved `npm ci` failures in GitHub Actions and local `npm install` `ERESOLVE` errors:
+
+- **Pinned Better Auth.** `package.json` pins `"better-auth": "1.6.24"`. This prevents automatic minor resolution to Better Auth 1.7.x, which removed `providerId` as a valid selector in `auth.api.getAccessToken` and would break six server routes and mock assertions across tests.
+- **Enabled legacy peer dependencies configuration.** Created `.npmrc` with `legacy-peer-deps=true`. This allows npm to accept `drizzle-orm@^1.0.0-rc.4` and `drizzle-kit@^1.0.0-rc.4` alongside `@better-auth/drizzle-adapter@1.6.24` and `better-auth@1.6.24` without tripping strict peer resolution checks in npm 7+.
+- **Clean lockfile regeneration.** Regenerated `package-lock.json` using `npm install --package-lock-only`. The missing lockfile entries (including `@nestjs/common` and transitive packages) were reconciled. `npm ci --dry-run` and clean `npm install` now succeed without errors.
+- **Test discriminated union narrowing.** Updated `src/lib/chat/__tests__/retryIdempotency.test.ts` to narrow `result.ok` before asserting `result.status`, satisfying TypeScript type checking on `ConversationChatResult` and oxlint `unicorn/no-thenable` checks.
+
 
 
 

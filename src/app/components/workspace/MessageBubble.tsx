@@ -5,7 +5,7 @@ import { AlertCircle, FileText, Pencil, RotateCcw } from "lucide-react";
 import { MessageRenderer } from "./MessageRenderer";
 import { CopyCodeButton } from "./CopyCodeButton";
 import { formatClockTime } from "./formatters";
-import type { ChatMessage, Citation } from "./types";
+import { MAX_CHAT_MESSAGE_LENGTH, type ChatMessage, type Citation } from "./types";
 
 /** Past this length a user prompt is clamped and gets a Show more toggle. */
 const COLLAPSE_OVER_CHARS = 280;
@@ -27,10 +27,17 @@ interface MessageBubbleProps {
   message: ChatMessage;
   onCitationClick: (citation: Citation) => void;
   onRetry?: () => void;
+  onRegenerate?: () => void;
   onEdit?: (content: string, messageId?: string) => void;
 }
 
-export function MessageBubble({ message, onCitationClick, onRetry, onEdit }: MessageBubbleProps) {
+export function MessageBubble({
+  message,
+  onCitationClick,
+  onRetry,
+  onRegenerate,
+  onEdit,
+}: MessageBubbleProps) {
   const isUser = message.role === "user";
   const isFailed = message.status === "failed";
   const isStreaming = message.status === "streaming";
@@ -56,31 +63,42 @@ export function MessageBubble({ message, onCitationClick, onRetry, onEdit }: Mes
   if (isUser) {
     if (isEditing) {
       return (
-        <div className="flex w-full flex-col items-end">
-          <div className="w-full max-w-[85%] rounded-[14px_14px_2px_14px] border border-bubble-line bg-bubble p-3 text-bubble-ink shadow-card">
-            <textarea
-              value={draftContent}
-              onChange={(e) => setDraftContent(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") {
-                  e.preventDefault();
-                  setIsEditing(false);
-                  setDraftContent(message.content);
-                } else if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  if (draftContent.trim()) {
+        <div className="flex flex-col items-end">
+          <div className="min-w-[180px] max-w-[75%] rounded-[14px_14px_2px_14px] border border-bubble-line bg-bubble p-2.5 text-bubble-ink shadow-card">
+            <div className="grid">
+              <span
+                className="invisible col-start-1 row-start-1 whitespace-pre-wrap break-words p-2 text-sm leading-relaxed border border-transparent select-none pointer-events-none"
+                aria-hidden
+              >
+                {draftContent || " "}
+              </span>
+              <textarea
+                value={draftContent}
+                onChange={(e) => setDraftContent(e.target.value)}
+                maxLength={MAX_CHAT_MESSAGE_LENGTH}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    e.preventDefault();
                     setIsEditing(false);
-                    onEdit?.(draftContent.trim(), message.id);
+                    setDraftContent(message.content);
+                  } else if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    if (
+                      draftContent.trim() &&
+                      draftContent.trim().length <= MAX_CHAT_MESSAGE_LENGTH
+                    ) {
+                      setIsEditing(false);
+                      onEdit?.(draftContent.trim(), message.id);
+                    }
                   }
-                }
-              }}
-              autoFocus
-              rows={Math.max(2, Math.min(8, draftContent.split("\n").length))}
-              placeholder="Edit message..."
-              aria-label="Edit message"
-              className="w-full min-h-[58px] max-h-[220px] resize-none rounded-[8px] border border-line bg-surface p-2.5 text-sm leading-relaxed text-ink placeholder:text-ink-4 outline-none focus:outline-none focus-visible:outline-none ring-0 focus:ring-0 focus-visible:ring-0 shadow-none [field-sizing:content]"
-            />
-            <div className="mt-2.5 flex items-center justify-end gap-2">
+                }}
+                autoFocus
+                placeholder="Edit message..."
+                aria-label="Edit message"
+                className="col-start-1 row-start-1 w-full h-full min-h-[38px] max-h-[220px] resize-none overflow-y-auto rounded-[8px] border border-line bg-surface p-2 text-sm leading-relaxed text-ink placeholder:text-ink-4 outline-none focus:outline-none focus-visible:outline-none ring-0 focus:ring-0 focus-visible:ring-0 shadow-none"
+              />
+            </div>
+            <div className="mt-2 flex items-center justify-end gap-2">
               <button
                 type="button"
                 onClick={() => {
@@ -94,12 +112,18 @@ export function MessageBubble({ message, onCitationClick, onRetry, onEdit }: Mes
               <button
                 type="button"
                 onClick={() => {
-                  if (draftContent.trim()) {
+                  if (
+                    draftContent.trim() &&
+                    draftContent.trim().length <= MAX_CHAT_MESSAGE_LENGTH
+                  ) {
                     setIsEditing(false);
                     onEdit?.(draftContent.trim(), message.id);
                   }
                 }}
-                disabled={!draftContent.trim()}
+                disabled={
+                  !draftContent.trim() ||
+                  draftContent.trim().length > MAX_CHAT_MESSAGE_LENGTH
+                }
                 title="Save edit"
                 aria-label="Save edit"
                 className="cursor-pointer rounded-[6px] bg-accent px-3 py-1 text-xs font-semibold text-accent-ink transition-opacity hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.96]"
@@ -111,6 +135,8 @@ export function MessageBubble({ message, onCitationClick, onRetry, onEdit }: Mes
         </div>
       );
     }
+
+    const isTemp = !message.id || message.id.startsWith("temp-");
 
     return (
       <div className="flex flex-col items-end">
@@ -142,8 +168,9 @@ export function MessageBubble({ message, onCitationClick, onRetry, onEdit }: Mes
               setDraftContent(message.content);
               setIsEditing(true);
             }}
-            className="inline-flex cursor-pointer items-center gap-1.5 rounded-[6px] px-2 py-1 text-[12px] font-medium text-chat-ink-3 transition-colors duration-150 hover:bg-chat-3 hover:text-chat-ink active:scale-[0.96]"
-            title="Edit message"
+            disabled={isTemp}
+            className="inline-flex cursor-pointer items-center gap-1.5 rounded-[6px] px-2 py-1 text-[12px] font-medium text-chat-ink-3 transition-colors duration-150 hover:bg-chat-3 hover:text-chat-ink active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40"
+            title={isTemp ? "Cannot edit while message is sending" : "Edit message"}
             aria-label="Edit message"
           >
             <Pencil className="size-3" aria-hidden />
@@ -158,11 +185,11 @@ export function MessageBubble({ message, onCitationClick, onRetry, onEdit }: Mes
   const waiting = isStreaming && message.content === "";
 
   const handleRegenerate = () => {
-    if (!onRetry || regenerating) return;
+    if (!onRegenerate || regenerating) return;
     setRegenerating(true);
     clearTimeout(regenerateTimer.current);
     regenerateTimer.current = setTimeout(() => setRegenerating(false), REGENERATE_FEEDBACK_MS);
-    onRetry();
+    onRegenerate();
   };
 
   return (
@@ -217,7 +244,7 @@ export function MessageBubble({ message, onCitationClick, onRetry, onEdit }: Mes
           <div className="mt-3 flex flex-wrap items-center gap-1.5">
             <CopyCodeButton text={message.content} />
 
-            {!isFailed && onRetry && (
+            {!isFailed && onRegenerate && (
               <button
                 type="button"
                 onClick={handleRegenerate}

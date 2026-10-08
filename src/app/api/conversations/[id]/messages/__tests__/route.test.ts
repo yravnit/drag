@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { GET, PATCH } from "../route";
+import { MAX_CHAT_MESSAGE_LENGTH } from "@/app/components/workspace/types";
 
 const mockGetSession = vi.fn();
 vi.mock("@/lib/auth/server", () => ({
@@ -108,6 +109,30 @@ describe("Conversations [id] Messages API Routes", () => {
       const res = await PATCH(req, { params: Promise.resolve({ id: "c-1" }) });
 
       expect(res.status).toBe(400);
+    });
+
+    it("returns 400 when message content exceeds MAX_CHAT_MESSAGE_LENGTH", async () => {
+      mockGetSession.mockResolvedValueOnce({ user: { id: "user-1" } });
+      mockSelect.mockReturnValueOnce({
+        from: () => ({
+          where: () => ({
+            limit: () => Promise.resolve([{ id: "c-1", userId: "user-1" }]),
+          }),
+        }),
+      });
+
+      const req = new Request("http://localhost/api/conversations/c-1/messages", {
+        method: "PATCH",
+        body: JSON.stringify({
+          messageId: "m-1",
+          content: "a".repeat(MAX_CHAT_MESSAGE_LENGTH + 1),
+        }),
+      });
+      const res = await PATCH(req, { params: Promise.resolve({ id: "c-1" }) });
+
+      expect(res.status).toBe(400);
+      const data = await res.json();
+      expect(data.error).toContain("Message exceeds maximum allowed length");
     });
 
     it("returns 404 when message is not found or not editable", async () => {

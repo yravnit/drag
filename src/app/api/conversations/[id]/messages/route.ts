@@ -3,6 +3,7 @@ import { auth } from "@/lib/auth/server";
 import { db } from "@/db/db";
 import { conversations, messages } from "@/db/schema";
 import { and, eq, asc } from "drizzle-orm";
+import { MAX_CHAT_MESSAGE_LENGTH } from "@/app/components/workspace/types";
 
 /**
  * GET /api/conversations/[id]/messages
@@ -91,6 +92,12 @@ export async function PATCH(
     const trimmed = content.trim();
     if (!trimmed) {
       return NextResponse.json({ error: "Message content cannot be empty" }, { status: 400 });
+    }
+    if (trimmed.length > MAX_CHAT_MESSAGE_LENGTH) {
+      return NextResponse.json(
+        { error: `Message exceeds maximum allowed length of ${MAX_CHAT_MESSAGE_LENGTH} characters.` },
+        { status: 400 },
+      );
     }
 
     const [updated] = await db
