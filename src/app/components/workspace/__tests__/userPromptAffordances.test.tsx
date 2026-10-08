@@ -70,6 +70,54 @@ describe("user prompt affordances", () => {
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(long);
   });
 
+  it("puts an edit button that opens in-place editor and saves with onEdit", () => {
+    const onEdit = vi.fn();
+    mount(
+      <MessageBubble
+        message={userMsg("What does OwnerRepository do?")}
+        onCitationClick={() => {}}
+        onEdit={onEdit}
+      />,
+    );
+    const editBtn = container?.querySelector('button[title="Edit message"]');
+    const copyBtn = container?.querySelector('button[title="Copy to clipboard"]');
+    expect(editBtn).toBeTruthy();
+    expect(copyBtn).toBeTruthy();
+    act(() => {
+      (editBtn as HTMLButtonElement)?.click();
+    });
+    const textarea = container?.querySelector("textarea");
+    expect(textarea).toBeTruthy();
+    expect((textarea as HTMLTextAreaElement)?.value).toBe("What does OwnerRepository do?");
+    const saveBtn = buttonByText("Save");
+    expect(saveBtn).toBeTruthy();
+    act(() => {
+      saveBtn?.click();
+    });
+    expect(onEdit).toHaveBeenCalledWith("What does OwnerRepository do?", "m1");
+  });
+
+  it("cancels in-place editing and restores prompt view", () => {
+    mount(
+      <MessageBubble
+        message={userMsg("What does OwnerRepository do?")}
+        onCitationClick={() => {}}
+      />,
+    );
+    const editBtn = container?.querySelector('button[title="Edit message"]');
+    act(() => {
+      (editBtn as HTMLButtonElement)?.click();
+    });
+    expect(container?.querySelector("textarea")).toBeTruthy();
+    const cancelBtn = buttonByText("Cancel");
+    expect(cancelBtn).toBeTruthy();
+    act(() => {
+      cancelBtn?.click();
+    });
+    expect(container?.querySelector("textarea")).toBeNull();
+    expect(promptText()?.textContent).toBe("What does OwnerRepository do?");
+  });
+
   it("leaves a short prompt whole, with no toggle", () => {
     mount(
       <MessageBubble
@@ -137,6 +185,6 @@ describe("composer message limit", () => {
 
   it("counts down the remaining characters near the limit", () => {
     mountComposer("a".repeat(MAX_CHAT_MESSAGE_LENGTH - 50));
-    expect(container?.textContent).toContain("50 left");
+    expect(container?.textContent).toContain("50 chars left");
   });
 });

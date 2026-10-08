@@ -1,7 +1,9 @@
 "use client";
-
-import React, { memo, useEffect, useState } from "react";
-import { X, Check, Shield, Building2 } from "lucide-react";
+import { memo, useState } from "react";
+import { Check, Shield, X } from "lucide-react";
+import { Badge } from "@/components/ui/Badge";
+import { Button } from "@/components/ui/Button";
+import { Modal } from "@/components/ui/Modal";
 import { formatLimit } from "./formatters";
 import type { PlanUsageData } from "./types";
 
@@ -11,23 +13,44 @@ interface PlanUsageModalProps {
   planUsage: PlanUsageData | null;
 }
 
-function PlanUsageModalImpl({
-  isOpen,
-  onClose,
-  planUsage,
-}: PlanUsageModalProps) {
+interface UsageMeterProps {
+  label: string;
+  used: number;
+  limit: number;
+  suffix?: string;
+  metered: boolean;
+}
+
+function UsageMeter({
+  label,
+  used,
+  limit,
+  suffix,
+  metered,
+}: UsageMeterProps) {
+  const percent = metered && limit > 0 ? Math.min(100, (used / limit) * 100) : 0;
+
+  return (
+    <div className="rounded-control border border-line bg-surface p-3.5">
+      <div className="text-xs font-medium text-ink-2">{label}</div>
+      <div className="mt-1 flex items-baseline gap-1.5">
+        <span className="text-2xl font-bold text-ink">{used}</span>
+        <span className="font-mono text-xs text-ink-4">
+          {metered ? `/ ${formatLimit(limit)} ${suffix ?? ""}` : `${suffix ?? ""} (unmetered)`}
+        </span>
+      </div>
+      <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-surface-3">
+        <div
+          className="h-1.5 rounded-full bg-accent transition-[width] duration-300 ease-out"
+          style={{ width: `${percent}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function PlanUsageModalImpl({ isOpen, onClose, planUsage }: PlanUsageModalProps) {
   const [contactNotice, setContactNotice] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, onClose]);
-
-  if (!isOpen) return null;
 
   const currentPlan = planUsage?.plan || "free";
   const entitlements = planUsage?.entitlements;
@@ -35,318 +58,235 @@ function PlanUsageModalImpl({
 
   const handleUpgradeClick = (targetPlan: string) => {
     if (targetPlan === "hobby") {
-      setContactNotice("Hobby plan automated checkout is coming soon. Please contact our team for early activation.");
+      setContactNotice(
+        "Hobby plan automated checkout is coming soon. Please contact our team for early activation.",
+      );
     } else if (targetPlan === "enterprise") {
-      setContactNotice("Contact sales for custom pricing and dedicated infrastructure setup.");
+      setContactNotice(
+        "Contact sales for custom pricing and dedicated infrastructure setup.",
+      );
     }
   };
 
+  const isCurrent = (plan: string) => currentPlan === plan;
+  const isUpgradeable = currentPlan === "free";
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-100" onClick={onClose}>
-      <div className="relative w-full max-w-3xl bg-[#0f0f12] border border-zinc-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] animate-in fade-in zoom-in-95 duration-150" onClick={(e) => e.stopPropagation()}>
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-900 bg-zinc-950/40">
-          <div>
-            <h3 className="text-base font-bold text-white">Subscription & Usage</h3>
-            <p className="text-xs text-zinc-400 mt-0.5">
-              Manage your DRAG workspace tier and review your monthly limits.
+    <Modal
+      open={isOpen}
+      onClose={onClose}
+      title="Subscription & Usage"
+      description="Manage your DRAG workspace tier and review your monthly limits."
+      className="max-w-4xl h-[82vh] max-h-[780px] min-h-[580px]"
+    >
+      <div className="space-y-5">
+        {currentPlan === "boss" && (
+          <div className="space-y-1 rounded-card border border-accent/40 bg-accent-soft p-4 text-xs text-ink-2">
+            <div className="flex items-center gap-2">
+              <Shield className="size-4 shrink-0 text-accent-ink" aria-hidden />
+              <span className="text-sm font-bold text-accent-ink">BOSS Mode Active</span>
+            </div>
+            <p className="leading-relaxed">
+              Infinite repositories, unmetered monthly queries, all branch selection unlocked,
+              unlimited file count and storage. Reserved exclusively for the workspace
+              administrator.
             </p>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1 hover:bg-zinc-900 active:scale-90 rounded-lg text-zinc-500 hover:text-zinc-300 transition cursor-pointer"
-            title="Close modal (Esc)"
-            aria-label="Close modal"
+        )}
+
+        {entitlements && usage && (
+          <div className="rounded-card border border-line bg-surface-2 p-4">
+            <h4 className="mb-3 text-xs font-bold tracking-wider text-ink-3 uppercase">
+              Current usage
+            </h4>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <UsageMeter
+                label="Repositories"
+                used={usage.repositoriesCount}
+                limit={entitlements.repositoryLimit}
+                metered={entitlements.repositoryLimit > 0}
+              />
+              <UsageMeter
+                label="RAG queries"
+                used={usage.monthlyQueriesCount}
+                limit={entitlements.monthlyQueryLimit ?? 0}
+                suffix="this month"
+                metered={entitlements.monthlyQueryLimit !== null}
+              />
+            </div>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div
+            className={`flex flex-col justify-between rounded-card border p-4 ${
+              isCurrent("free") ? "border-accent/50 bg-accent-soft" : "border-line bg-surface"
+            }`}
           >
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6">
-          {/* Boss plan status */}
-          {currentPlan === "boss" && (
-            <div className="p-4 rounded-xl border border-amber-500/40 bg-gradient-to-r from-amber-950/40 via-yellow-950/20 to-zinc-950 text-xs text-amber-200 space-y-1">
-              <div className="font-bold text-sm text-amber-300">
-                BOSS Mode Active
+            <div>
+              <div className="flex items-center justify-between gap-2">
+                <h4 className="text-sm font-bold text-ink">Free</h4>
+                {isCurrent("free") && <Badge tone="accent">Current</Badge>}
               </div>
-              <p className="text-zinc-200 text-xs leading-relaxed">
-                Infinite repositories, unmetered monthly queries, all branch selection unlocked, unlimited file count and storage. Reserved exclusively for the workspace administrator.
-              </p>
+              <div className="mt-3 text-2xl font-extrabold text-ink">₹0</div>
+              <p className="mt-1.5 text-xs text-ink-3">Free plan for personal experimentation</p>
+              <ul className="mt-4 space-y-1.5 text-xs text-ink-2">
+                <li className="flex items-center gap-2">
+                  <Check className="size-3.5 shrink-0 text-accent-ink" aria-hidden />
+                  2 repositories
+                </li>
+                <li className="flex items-center gap-2">
+                  <Check className="size-3.5 shrink-0 text-accent-ink" aria-hidden />
+                  25 queries / month
+                </li>
+                <li className="flex items-center gap-2">
+                  <Check className="size-3.5 shrink-0 text-accent-ink" aria-hidden />
+                  50 MB repository size
+                </li>
+                <li className="flex items-center gap-2">
+                  <Check className="size-3.5 shrink-0 text-accent-ink" aria-hidden />
+                  2,500 files
+                </li>
+              </ul>
             </div>
-          )}
-
-          {/* Current Usage Status (Free / Hobby limits display) */}
-          {entitlements && usage && (
-            <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-4">
-              <h4 className="text-xs font-bold text-zinc-300 uppercase tracking-wider mb-3">
-                Current usage
-              </h4>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {/* Repositories usage */}
-                <div className="p-3.5 rounded-lg bg-zinc-900/50 border border-zinc-850">
-                  <div className="text-xs text-zinc-300 font-medium">Repositories</div>
-                  <div className="mt-1 flex items-baseline gap-1.5">
-                    <span className="text-2xl font-bold text-white">
-                      {usage.repositoriesCount}
-                    </span>
-                    <span className="text-xs text-zinc-400 font-mono">
-                      / {formatLimit(entitlements.repositoryLimit)}
-                    </span>
-                  </div>
-                  <div className="mt-2 w-full bg-zinc-800 rounded-full h-1.5 overflow-hidden">
-                    <div
-                      className="bg-teal-400 h-1.5 rounded-full transition-all duration-300"
-                      style={{
-                        width: `${Math.min(100, (usage.repositoriesCount / entitlements.repositoryLimit) * 100)}%`,
-                      }}
-                    />
-                  </div>
-                </div>
-
-                {/* RAG query quota usage */}
-                <div className="p-3.5 rounded-lg bg-zinc-900/50 border border-zinc-850">
-                  <div className="text-xs text-zinc-300 font-medium">RAG queries</div>
-                  <div className="mt-1 flex items-baseline gap-1.5">
-                    <span className="text-2xl font-bold text-white">
-                      {usage.monthlyQueriesCount}
-                    </span>
-                    <span className="text-xs text-zinc-400 font-mono">
-                      {entitlements.monthlyQueryLimit !== null
-                        ? `/ ${formatLimit(entitlements.monthlyQueryLimit)} this month`
-                        : "queries this month (unmetered)"}
-                    </span>
-                  </div>
-                  {entitlements.monthlyQueryLimit !== null && (
-                    <div className="mt-2 w-full bg-zinc-800 rounded-full h-1.5 overflow-hidden">
-                      <div
-                        className="bg-teal-400 h-1.5 rounded-full transition-all duration-300"
-                        style={{
-                          width: `${Math.min(100, (usage.monthlyQueriesCount / entitlements.monthlyQueryLimit) * 100)}%`,
-                        }}
-                      />
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Pricing Tiers Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {/* Free Tier */}
-            <div
-              className={`p-5 rounded-xl border flex flex-col justify-between transition ${
-                currentPlan === "free"
-                  ? "border-teal-500/50 bg-teal-950/10 shadow-sm ring-1 ring-teal-500/20"
-                  : "border-zinc-800 bg-zinc-950/20"
-              }`}
-            >
-              <div>
-                <div className="flex items-center justify-between">
-                  <h4 className="font-bold text-sm text-white">Free</h4>
-                  {currentPlan === "free" && (
-                    <span className="text-[10px] font-bold text-teal-400 bg-teal-500/10 px-2 py-0.5 rounded border border-teal-500/20">
-                      Current
-                    </span>
-                  )}
-                </div>
-                <div className="mt-3">
-                  <span className="text-2xl font-extrabold text-white">₹0</span>
-                </div>
-                <p className="mt-2 text-xs text-zinc-300">
-                  Free plan for personal experimentation
-                </p>
-
-                <ul className="mt-4 space-y-2 text-xs text-zinc-300">
-                  <li className="flex items-center gap-2">
-                    <Check className="h-3.5 w-3.5 text-teal-400 shrink-0" />
-                    <span>2 repositories</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Check className="h-3.5 w-3.5 text-teal-400 shrink-0" />
-                    <span>25 queries / month</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Check className="h-3.5 w-3.5 text-teal-400 shrink-0" />
-                    <span>50 MB repository size</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Check className="h-3.5 w-3.5 text-teal-400 shrink-0" />
-                    <span>2,500 files</span>
-                  </li>
-                </ul>
-              </div>
-
-              <div className="mt-6 pt-4 border-t border-zinc-900">
-                {currentPlan === "free" ? (
-                  <button
-                    disabled
-                    className="w-full py-2 px-3 rounded-lg text-xs font-semibold bg-zinc-800 text-zinc-400 text-center cursor-default"
-                  >
-                    Active Plan
-                  </button>
-                ) : (
-                  <span className="text-xs text-zinc-400 block text-center">Included</span>
-                )}
-              </div>
-            </div>
-
-            {/* Hobby Tier */}
-            <div
-              className={`p-5 rounded-xl border flex flex-col justify-between transition ${
-                currentPlan === "hobby"
-                  ? "border-teal-500/50 bg-teal-950/10 shadow-sm ring-1 ring-teal-500/20"
-                  : "border-zinc-800 bg-zinc-950/20"
-              }`}
-            >
-              <div>
-                <div className="flex items-center justify-between">
-                  <h4 className="font-bold text-sm text-white">Hobby</h4>
-                  {currentPlan === "hobby" && (
-                    <span className="text-[10px] font-bold text-teal-400 bg-teal-500/10 px-2 py-0.5 rounded border border-teal-500/20">
-                      Current
-                    </span>
-                  )}
-                </div>
-                <div className="mt-3">
-                  <span className="text-2xl font-extrabold text-white">₹499</span>
-                  <span className="text-xs text-zinc-300">/month</span>
-                </div>
-                <p className="mt-2 text-xs text-zinc-300">
-                  Hobby plan for active developers
-                </p>
-
-                <ul className="mt-4 space-y-2 text-xs text-zinc-300">
-                  <li className="flex items-center gap-2">
-                    <Check className="h-3.5 w-3.5 text-teal-400 shrink-0" />
-                    <span>10 repositories</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Check className="h-3.5 w-3.5 text-teal-400 shrink-0" />
-                    <span>Higher query quota</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Check className="h-3.5 w-3.5 text-teal-400 shrink-0" />
-                    <span>250 MB repository size</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Check className="h-3.5 w-3.5 text-teal-400 shrink-0" />
-                    <span>12,500 files</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Check className="h-3.5 w-3.5 text-teal-400 shrink-0" />
-                    <span>Incremental reindexing</span>
-                  </li>
-                </ul>
-              </div>
-
-              <div className="mt-6 pt-4 border-t border-zinc-900">
-                {currentPlan === "hobby" ? (
-                  <button
-                    disabled
-                    className="w-full py-2 px-3 rounded-lg text-xs font-semibold bg-zinc-800 text-zinc-400 text-center cursor-default"
-                  >
-                    Active Plan
-                  </button>
-                ) : currentPlan === "free" ? (
-                  <button
-                    onClick={() => handleUpgradeClick("hobby")}
-                    className="w-full py-2 px-3 rounded-lg text-xs font-bold bg-teal-500 hover:bg-teal-400 active:scale-[0.98] text-zinc-950 transition cursor-pointer shadow"
-                  >
-                    Upgrade to Hobby
-                  </button>
-                ) : (
-                  <span className="text-xs text-zinc-400 block text-center">Included</span>
-                )}
-              </div>
-            </div>
-
-            {/* Enterprise Tier */}
-            <div
-              className={`p-5 rounded-xl border flex flex-col justify-between transition ${
-                currentPlan === "enterprise"
-                  ? "border-teal-500/50 bg-teal-950/10 shadow-sm ring-1 ring-teal-500/20"
-                  : "border-zinc-800 bg-zinc-950/20"
-              }`}
-            >
-              <div>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
-                    <Building2 className="h-4 w-4 text-purple-400" />
-                    <h4 className="font-bold text-sm text-white">Enterprise</h4>
-                  </div>
-                  {currentPlan === "enterprise" && (
-                    <span className="text-[10px] font-bold text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded border border-purple-500/20">
-                      Current
-                    </span>
-                  )}
-                </div>
-                <div className="mt-3">
-                  <span className="text-xl font-extrabold text-white">₹15,000*</span>
-                  <span className="text-xs text-zinc-300">/month</span>
-                </div>
-                <p className="mt-2 text-xs text-zinc-300">
-                  *Contact sales for custom pricing
-                </p>
-
-                <ul className="mt-4 space-y-2 text-xs text-zinc-300">
-                  <li className="flex items-center gap-2">
-                    <Shield className="h-3.5 w-3.5 text-purple-400 shrink-0" />
-                    <span>Custom repository limits</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Shield className="h-3.5 w-3.5 text-purple-400 shrink-0" />
-                    <span>Negotiated query quota</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Shield className="h-3.5 w-3.5 text-purple-400 shrink-0" />
-                    <span>Custom repository sizes</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Shield className="h-3.5 w-3.5 text-purple-400 shrink-0" />
-                    <span>Dedicated SLAs</span>
-                  </li>
-                </ul>
-              </div>
-
-              <div className="mt-6 pt-4 border-t border-zinc-900">
-                {currentPlan === "enterprise" ? (
-                  <button
-                    disabled
-                    className="w-full py-2 px-3 rounded-lg text-xs font-semibold bg-zinc-800 text-zinc-400 text-center cursor-default"
-                  >
-                    Active Plan
-                  </button>
-                ) : currentPlan === "free" ? (
-                  <button
-                    onClick={() => handleUpgradeClick("enterprise")}
-                    className="w-full py-2 px-3 rounded-lg text-xs font-semibold border border-zinc-700 bg-zinc-900 hover:bg-zinc-800 active:scale-[0.98] text-zinc-200 transition cursor-pointer"
-                  >
-                    Contact sales for custom pricing
-                  </button>
-                ) : (
-                  <span className="text-xs text-zinc-400 block text-center">Included</span>
-                )}
-              </div>
+            <div className="mt-5 border-t border-line pt-3">
+              {isCurrent("free") ? (
+                <Button size="sm" disabled className="w-full">
+                  Active Plan
+                </Button>
+              ) : (
+                <span className="block text-center text-xs text-ink-4">Included</span>
+              )}
             </div>
           </div>
 
-          {/* Contact notice alert if triggered */}
-          {contactNotice && (
-            <div className="p-3 bg-zinc-900 border border-zinc-750 rounded-xl text-xs text-zinc-300 flex items-center justify-between">
-              <span>{contactNotice}</span>
-              <button
-                onClick={() => setContactNotice(null)}
-                className="p-0.5 rounded text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 active:scale-90 transition cursor-pointer" title="Dismiss"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
+          <div
+            className={`flex flex-col justify-between rounded-card border p-4 ${
+              isCurrent("hobby")
+                ? "border-accent/50 bg-accent-soft"
+                : "border-line bg-surface"
+            }`}
+          >
+            <div>
+              <div className="flex items-center justify-between gap-2">
+                <h4 className="text-sm font-bold text-ink">Hobby</h4>
+                {isCurrent("hobby") && <Badge tone="accent">Current</Badge>}
+              </div>
+              <div className="mt-3 text-2xl font-extrabold text-ink">₹499</div>
+              <span className="text-xs text-ink-3">/month</span>
+              <p className="mt-1.5 text-xs text-ink-3">Hobby plan for active developers</p>
+              <ul className="mt-4 space-y-1.5 text-xs text-ink-2">
+                <li className="flex items-center gap-2">
+                  <Check className="size-3.5 shrink-0 text-accent-ink" aria-hidden />
+                  10 repositories
+                </li>
+                <li className="flex items-center gap-2">
+                  <Check className="size-3.5 shrink-0 text-accent-ink" aria-hidden />
+                  Higher query quota
+                </li>
+                <li className="flex items-center gap-2">
+                  <Check className="size-3.5 shrink-0 text-accent-ink" aria-hidden />
+                  250 MB repository size
+                </li>
+                <li className="flex items-center gap-2">
+                  <Check className="size-3.5 shrink-0 text-accent-ink" aria-hidden />
+                  12,500 files
+                </li>
+                <li className="flex items-center gap-2">
+                  <Check className="size-3.5 shrink-0 text-accent-ink" aria-hidden />
+                  Incremental reindexing
+                </li>
+              </ul>
             </div>
-          )}
+            <div className="mt-5 border-t border-line pt-3">
+              {isCurrent("hobby") ? (
+                <Button size="sm" disabled className="w-full">
+                  Active Plan
+                </Button>
+              ) : isUpgradeable ? (
+                <Button size="sm" className="w-full" onClick={() => handleUpgradeClick("hobby")}>
+                  Upgrade to Hobby
+                </Button>
+              ) : (
+                <span className="block text-center text-xs text-ink-4">Included</span>
+              )}
+            </div>
+          </div>
+
+          <div
+            className={`flex flex-col justify-between rounded-card border p-4 ${
+              isCurrent("enterprise")
+                ? "border-accent/50 bg-accent-soft"
+                : "border-line bg-surface"
+            }`}
+          >
+            <div>
+              <div className="flex items-center justify-between gap-2">
+                <h4 className="text-sm font-bold text-ink">Enterprise</h4>
+                {isCurrent("enterprise") && <Badge tone="accent">Current</Badge>}
+              </div>
+              <div className="mt-3 text-2xl font-extrabold text-ink">₹15,000*</div>
+              <span className="text-xs text-ink-3">/month</span>
+              <p className="mt-1.5 text-xs text-ink-3">*Contact sales for custom pricing</p>
+              <ul className="mt-4 space-y-1.5 text-xs text-ink-2">
+                <li className="flex items-center gap-2">
+                  <Shield className="size-3.5 shrink-0 text-accent-ink" aria-hidden />
+                  Custom repository limits
+                </li>
+                <li className="flex items-center gap-2">
+                  <Shield className="size-3.5 shrink-0 text-accent-ink" aria-hidden />
+                  Negotiated query quota
+                </li>
+                <li className="flex items-center gap-2">
+                  <Shield className="size-3.5 shrink-0 text-accent-ink" aria-hidden />
+                  Custom repository sizes
+                </li>
+                <li className="flex items-center gap-2">
+                  <Shield className="size-3.5 shrink-0 text-accent-ink" aria-hidden />
+                  Dedicated SLAs
+                </li>
+              </ul>
+            </div>
+            <div className="mt-5 border-t border-line pt-3">
+              {isCurrent("enterprise") ? (
+                <Button size="sm" disabled className="w-full">
+                  Active Plan
+                </Button>
+              ) : isUpgradeable ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => handleUpgradeClick("enterprise")}
+                >
+                  Contact sales for custom pricing
+                </Button>
+              ) : (
+                <span className="block text-center text-xs text-ink-4">Included</span>
+              )}
+            </div>
+          </div>
         </div>
+
+        {contactNotice && (
+          <div
+            role="status"
+            className="flex items-center justify-between gap-3 rounded-control border border-line bg-surface-2 p-3 text-xs text-ink-2"
+          >
+            <span>{contactNotice}</span>
+            <button
+              type="button"
+              onClick={() => setContactNotice(null)}
+              aria-label="Dismiss notice"
+              title="Dismiss"
+              className="cursor-pointer rounded-[4px] p-0.5 text-ink-4 transition-colors duration-150 hover:bg-surface-3 hover:text-ink"
+            >
+              <X className="size-3.5" aria-hidden />
+            </button>
+          </div>
+        )}
       </div>
-    </div>
+    </Modal>
   );
 }
 

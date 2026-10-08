@@ -1,6 +1,6 @@
 import { db, Database } from "@/db/db";
 import { conversations, messages, repositories } from "@/db/schema";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import { verifyRepositoryAccess } from "@/lib/access/repositoryAccess";
 import { retrieveChunks, RetrievedChunk } from "@/lib/retrieval/retriever";
 import { assembleContext } from "@/lib/retrieval/contextAssembler";
@@ -136,6 +136,7 @@ export async function answerConversation(
       conversationId,
       model: input.model,
       firstMessage: message,
+      expectedTitle: conv.title,
     }).catch((err: unknown) => {
       // A bad title must never affect the answer.
       console.error("[Chat Title] Failed to title conversation:", err);
@@ -431,9 +432,41 @@ ${input.evidence}`;
  * The model is asked for JSON but is not trusted to emit it: replies get fenced, wrapped in prose
  * or use single quotes often enough that `parseTitle` walks four fallbacks before giving up.
  */
+/**
+ * Strips reasoning tokens (<think>...</think> or <thought>...</thought>) from stream output.
+ * Indicates whether reasoning is still in progress so characters are not counted against the cutoff.
+ */
+function stripReasoning(raw: string): { inReasoning: boolean; content: string } {
+  const match = raw.match(/<(think|thought)>([\s\S]*?)(?:<\/\1>|$)/i);
+  if (!match || match.index === undefined) {
+    return { inReasoning: false, content: raw };
+  }
+
+  const tagName = match[1];
+  const closingTag = `</${tagName}>`;
+  const closingTagIndex = raw.toLowerCase().indexOf(closingTag.toLowerCase());
+
+  if (closingTagIndex === -1) {
+    return { inReasoning: true, content: raw.slice(0, match.index) };
+  }
+
+  const before = raw.slice(0, match.index);
+  const after = raw.slice(closingTagIndex + closingTag.length);
+  const remainder = stripReasoning(after);
+  return {
+    inReasoning: remainder.inReasoning,
+    content: (before + remainder.content).trimStart(),
+  };
+}
+
 async function titleConversation(
   deps: ConversationChatDeps,
-  input: { conversationId: string; model?: string; firstMessage: string },
+  input: {
+    conversationId: string;
+    model?: string;
+    firstMessage: string;
+    expectedTitle?: string | null;
+  },
 ): Promise<void> {
   const stream = await deps.streamLLM(
     [
@@ -452,22 +485,38 @@ async function titleConversation(
   let raw = "";
   for await (const chunk of stream) {
     raw += chunk;
-    // A title is a few tokens; anything past this is the model rambling and we stop paying for it.
-    if (raw.length > 600) break;
+    const { inReasoning, content } = stripReasoning(raw);
+    // A title is a few tokens; anything past this is rambling.
+    // Skip reasoning before applying the cutoff so reasoning models do not exhaust the limit early.
+    if (!inReasoning && content.length > 600) break;
+    if (raw.length > 8000) break;
   }
 
-  const title = parseTitle(raw);
+  const { content } = stripReasoning(raw);
+  const title = parseTitle(content);
   if (!title) return;
+
+  const titleCondition =
+    input.expectedTitle === null
+      ? isNull(conversations.title)
+      : input.expectedTitle !== undefined
+        ? eq(conversations.title, input.expectedTitle)
+        : undefined;
+
+  const whereClause = titleCondition
+    ? and(eq(conversations.id, input.conversationId), titleCondition)
+    : eq(conversations.id, input.conversationId);
 
   await deps.database
     .update(conversations)
     .set({ title, updatedAt: new Date() })
-    .where(eq(conversations.id, input.conversationId));
+    .where(whereClause);
 }
 
 /** Best-effort extraction of a single short title. Returns null when nothing usable comes back. */
 export function parseTitle(raw: string): string | null {
-  const cleaned = raw.replace(/```(?:json)?/gi, "").trim();
+  const withoutReasoning = raw.replace(/<(think|thought)>[\s\S]*?(?:<\/\1>|$)/gi, "").trim();
+  const cleaned = withoutReasoning.replace(/```(?:json)?/gi, "").trim();
 
   // 1. Well-formed JSON, either as the whole reply or embedded in prose.
   const embedded = cleaned.match(/\{[\s\S]*\}/)?.[0];

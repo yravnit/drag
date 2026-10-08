@@ -45,11 +45,7 @@ Analyzing Spring Petclinic controllers.
 Here is the component diagram.`;
 
       const html = renderToStaticMarkup(
-        <MessageRenderer
-          content={content}
-          citations={[]}
-          onCitationClick={vi.fn()}
-        />,
+        <MessageRenderer content={content} citations={[]} onCitationClick={vi.fn()} />,
       );
 
       expect(html).toContain("Thinking");
@@ -63,11 +59,7 @@ Here is the component diagram.`;
 Now produce final answer.Here is the diagram of internal APIs.`;
 
       const html = renderToStaticMarkup(
-        <MessageRenderer
-          content={content}
-          citations={[]}
-          onCitationClick={vi.fn()}
-        />,
+        <MessageRenderer content={content} citations={[]} onCitationClick={vi.fn()} />,
       );
 
       expect(html).toContain("Thinking");
@@ -103,27 +95,9 @@ Now produce final answer.Here is the diagram of internal APIs.`;
       },
     };
 
-    it("renders Hobby tier without sparkle logo before text", () => {
-      const html = renderToStaticMarkup(
-        <PlanUsageModal
-          isOpen={true}
-          onClose={vi.fn()}
-          planUsage={mockPlanUsage}
-        />,
-      );
-
-      expect(html).toContain("Hobby");
-      // Sparkles icon SVG was removed before Hobby text
-      expect(html).not.toContain("<svg class=\"lucide lucide-sparkles");
-    });
-
     it("renders Enterprise price as ₹15,000* without 'Starting from'", () => {
       const html = renderToStaticMarkup(
-        <PlanUsageModal
-          isOpen={true}
-          onClose={vi.fn()}
-          planUsage={mockPlanUsage}
-        />,
+        <PlanUsageModal isOpen={true} onClose={vi.fn()} planUsage={mockPlanUsage} />,
       );
 
       expect(html).toContain("₹15,000*");

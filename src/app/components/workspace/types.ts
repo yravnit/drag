@@ -126,3 +126,9 @@ export interface NvidiaModelOption {
   id: string;
   latencyMs: number | null;
 }
+
+/** Full ordered id list after a sidebar drag, persisted by PATCH /api/repos/reorder. */
+export type ReorderRepositoriesHandler = (orderedIds: string[]) => void;
+
+/** Per-repository ordered thread ids after a drag, persisted by PATCH /api/conversations/reorder. */
+export type ReorderConversationsHandler = (repositoryId: string, orderedIds: string[]) => void;

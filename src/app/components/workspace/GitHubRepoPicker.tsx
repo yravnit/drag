@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { Loader2, ArrowRight, Lock, Globe, Check } from "lucide-react";
+import { ArrowRight, Check, Globe, Loader2, Lock } from "lucide-react";
+import { cn } from "@/lib/cn";
 import type { GithubRepoOption } from "./types";
 
 interface GitHubRepoPickerProps {
@@ -25,12 +26,15 @@ export function GitHubRepoPicker({
 }: GitHubRepoPickerProps) {
   const [filterText, setFilterText] = useState("");
 
-  const filteredRepos = repos.filter(
-    (r) =>
-      r.name.toLowerCase().includes(filterText.toLowerCase()) ||
-      r.owner.toLowerCase().includes(filterText.toLowerCase()) ||
-      (r.description && r.description.toLowerCase().includes(filterText.toLowerCase())),
-  );
+  const normalizedFilter = filterText.trim().toLowerCase();
+  const filteredRepos = normalizedFilter
+    ? repos.filter(
+        (repo) =>
+          repo.name.toLowerCase().includes(normalizedFilter) ||
+          repo.owner.toLowerCase().includes(normalizedFilter) ||
+          (repo.description ?? "").toLowerCase().includes(normalizedFilter),
+      )
+    : repos;
 
   return (
     <div className="space-y-3">
@@ -40,20 +44,21 @@ export function GitHubRepoPicker({
           value={filterText}
           onChange={(e) => setFilterText(e.target.value)}
           placeholder="Filter repositories..."
-          className="w-full bg-zinc-950 border border-zinc-850 hover:border-zinc-800 focus:border-zinc-700 rounded-xl px-3.5 py-2 text-xs text-zinc-200 focus:outline-none transition"
+          aria-label="Filter repositories"
+          className="w-full rounded-control border border-line bg-input px-3.5 py-2 text-xs text-input-ink transition-[border-color] duration-150 placeholder:text-ink-4 hover:border-line-2 focus:border-accent focus:outline-none"
         />
       )}
 
       {isLoading && repos.length === 0 ? (
         <div className="flex justify-center py-8">
-          <Loader2 className="h-6 w-6 animate-spin text-zinc-500" />
+          <Loader2 className="size-6 animate-spin text-ink-4" aria-hidden />
         </div>
       ) : repos.length === 0 ? (
-        <p className="text-center text-xs text-zinc-600 py-6">No repositories found on GitHub.</p>
+        <p className="py-6 text-center text-xs text-ink-4">No repositories found on GitHub.</p>
       ) : filteredRepos.length === 0 ? (
-        <p className="text-center text-xs text-zinc-600 py-6">No matching repositories found.</p>
+        <p className="py-6 text-center text-xs text-ink-4">No matching repositories found.</p>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+        <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
           {filteredRepos.map((repo) => {
             const isSelected = selectedUrl === repo.url;
 
@@ -70,46 +75,71 @@ export function GitHubRepoPicker({
                   }
                   onSelectRepo(repo);
                 }}
-                onKeyDown={(e) => {
-                  if (e.key !== "Enter" && e.key !== " ") return;
-                  e.preventDefault();
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter" && event.key !== " ") return;
+                  event.preventDefault();
                   if (repo.requiresUpgrade) onUpgrade?.();
                   else onSelectRepo(repo);
                 }}
-                className={`flex items-center justify-between rounded-xl border p-3 cursor-pointer group transition active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/60 ${
+                className={cn(
+                  "group flex cursor-pointer items-center justify-between gap-2 rounded-control border p-3 transition-colors duration-150 active:scale-[0.99]",
                   repo.requiresUpgrade
-                    ? "border-amber-900/40 bg-amber-950/10 hover:border-amber-600/60 hover:bg-amber-950/25"
+                    ? "border-amber-500/40 bg-amber-500/10 hover:border-amber-500/60 hover:bg-amber-500/20"
                     : isSelected
-                      ? "border-teal-500 bg-teal-500/15 ring-1 ring-teal-500/40 shadow-sm"
-                      : "border-zinc-800 bg-zinc-950/40 hover:border-zinc-600 hover:bg-zinc-900"
-                }`}
+                      ? "border-accent bg-accent-soft shadow-card"
+                      : "border-line bg-surface hover:border-line-2 hover:bg-surface-2",
+                )}
               >
-                <div className="min-w-0 pr-2">
+                <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1.5">
                     {repo.private ? (
-                      <Lock className={`h-3 w-3 shrink-0 ${repo.requiresUpgrade ? "text-amber-400" : isSelected ? "text-teal-400" : "text-zinc-500"}`} />
+                      <Lock
+                        className={cn(
+                          "size-3 shrink-0",
+                          repo.requiresUpgrade
+                            ? "text-amber-500"
+                            : isSelected
+                              ? "text-accent-ink"
+                              : "text-ink-4",
+                        )}
+                        aria-hidden
+                      />
                     ) : (
-                      <Globe className={`h-3 w-3 shrink-0 ${isSelected ? "text-teal-400" : "text-zinc-500"}`} />
+                      <Globe
+                        className={cn(
+                          "size-3 shrink-0",
+                          isSelected ? "text-accent-ink" : "text-ink-4",
+                        )}
+                        aria-hidden
+                      />
                     )}
-                    <span className={`text-xs font-semibold truncate ${isSelected ? "text-white font-bold" : "text-zinc-300 group-hover:text-white"}`}>
+                    <span
+                      className={cn(
+                        "truncate text-xs font-semibold",
+                        isSelected ? "font-bold text-accent-ink" : "text-ink-2",
+                      )}
+                    >
                       {repo.owner}/{repo.name}
                     </span>
                     {repo.requiresUpgrade && (
-                      <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 shrink-0">
+                      <span className="shrink-0 rounded-chip border border-amber-500/30 bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-semibold text-amber-500">
                         Requires Full Access
                       </span>
                     )}
                   </div>
                   {repo.description && (
-                    <div className="text-[10px] text-zinc-500 truncate mt-0.5 pl-4.5">
+                    <p className="mt-0.5 truncate pl-4.5 text-[10px] text-ink-4">
                       {repo.description}
-                    </div>
+                    </p>
                   )}
                 </div>
                 {isSelected ? (
-                  <Check className="h-4 w-4 text-teal-400 shrink-0" />
+                  <Check className="size-4 shrink-0 text-accent-ink" aria-hidden />
                 ) : (
-                  <ArrowRight className="h-4 w-4 text-zinc-600 transition shrink-0 group-hover:text-teal-400 group-hover:translate-x-0.5" />
+                  <ArrowRight
+                    className="size-4 shrink-0 text-ink-4 transition-[color,transform] duration-150 group-hover:translate-x-0.5 group-hover:text-accent-ink"
+                    aria-hidden
+                  />
                 )}
               </div>
             );
@@ -118,11 +148,12 @@ export function GitHubRepoPicker({
       )}
 
       {repos.length > 0 && hasMore && (
-        <div className="pt-2 text-center">
+        <div className="pt-1 text-center">
           <button
+            type="button"
             onClick={onLoadMore}
             disabled={isLoading}
-            className="rounded-lg px-3 py-1 text-xs font-semibold text-zinc-500 transition hover:bg-zinc-900 hover:text-zinc-200 active:scale-95 disabled:opacity-50 cursor-pointer"
+            className="cursor-pointer rounded-control px-3 py-1 text-xs font-semibold text-ink-3 transition-colors duration-150 hover:bg-surface-3 hover:text-ink disabled:pointer-events-none disabled:opacity-50"
           >
             {isLoading ? "Loading..." : "Load More Repositories"}
           </button>

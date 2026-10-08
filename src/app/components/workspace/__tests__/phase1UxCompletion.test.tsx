@@ -289,7 +289,7 @@ describe("Workspace UX Completion - Phase 1", () => {
   });
 
   describe("4. Conversation Response Modes in Composer", () => {
-    it("renders response mode buttons in Composer and highlights active mode", () => {
+    it("does not render response mode buttons or tools in Composer", () => {
       const html = renderToStaticMarkup(
         <Composer
           messageText=""
@@ -302,9 +302,10 @@ describe("Workspace UX Completion - Phase 1", () => {
         />,
       );
 
-      expect(html).toContain("Concise");
-      expect(html).toContain("Deep");
-      expect(html).toContain("Simple");
+      expect(html).not.toContain("Concise");
+      expect(html).not.toContain("Deep");
+      expect(html).not.toContain("Simple");
+      expect(html).not.toContain("+ Tools");
     });
   });
 

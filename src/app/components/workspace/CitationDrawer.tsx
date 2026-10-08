@@ -1,89 +1,38 @@
 "use client";
 
-import React, { memo, useState, useEffect } from "react";
-import { FileCode, X, Copy, Check, ExternalLink, AlertCircle, Download, Loader2 } from "lucide-react";
+import { memo, useState } from "react";
+import { Copy, Check, ExternalLink, AlertCircle, Download, Loader2, BookOpen } from "lucide-react";
+import { Drawer } from "@/components/ui/Drawer";
+import { highlightLine } from "@/lib/highlight";
+import { cn } from "@/lib/cn";
 import type { Citation, WorkspaceRepository } from "./types";
 
 interface CitationDrawerProps {
   citation: Citation | null;
   repository: WorkspaceRepository | null;
   onClose: () => void;
+  allCitations?: Citation[];
+  onSelectCitation?: (citation: Citation) => void;
 }
 
-/**
- * Lightweight syntax highlighter for code preview lines.
- * Highlights keywords, strings, comments, and identifiers cleanly.
- */
-function highlightCodeLine(line: string): React.ReactNode {
-  // Comment line
-  const trimmed = line.trim();
-  if (trimmed.startsWith("//") || trimmed.startsWith("/*") || trimmed.startsWith("*")) {
-    return <span className="text-zinc-500 italic">{line}</span>;
-  }
-
-  // Tokenize line by keywords and strings
-  const tokens = line.split(
-    /(\b(?:import|export|function|const|let|var|return|async|await|if|else|class|interface|type|from|default|extends|implements|new|try|catch|finally|throw)\b|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`[^`]*`|\/\/.+$)/g,
-  );
-
-  return (
-    <>
-      {tokens.map((token, idx) => {
-        if (!token) return null;
-        if (
-          /^(?:import|export|function|const|let|var|return|async|await|if|else|class|interface|type|from|default|extends|implements|new|try|catch|finally|throw)$/.test(
-            token,
-          )
-        ) {
-          return (
-            <span key={idx} className="text-teal-400 font-semibold">
-              {token}
-            </span>
-          );
-        }
-        if (token.startsWith('"') || token.startsWith("'") || token.startsWith("`")) {
-          return (
-            <span key={idx} className="text-emerald-300">
-              {token}
-            </span>
-          );
-        }
-        if (token.startsWith("//")) {
-          return (
-            <span key={idx} className="text-zinc-500 italic">
-              {token}
-            </span>
-          );
-        }
-        return <span key={idx}>{token}</span>;
-      })}
-    </>
-  );
-}
-
-function CitationDrawerImpl({ citation, repository, onClose }: CitationDrawerProps) {
+function CitationDrawerImpl({
+  citation,
+  repository,
+  onClose,
+  allCitations,
+  onSelectCitation,
+}: CitationDrawerProps) {
   const [copied, setCopied] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [downloaded, setDownloaded] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
 
-  // Esc key listener to close drawer
-  useEffect(() => {
-    if (!citation) return;
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        onClose();
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [citation, onClose]);
-
   if (!citation) return null;
 
-  const fileName = citation.filePath.split("/").pop() || citation.filePath;
+  const isPlaceholder = citation.filePath === "No sources cited yet" && citation.index === 0;
+  const fileName = isPlaceholder
+    ? "Sources"
+    : citation.filePath.split("/").pop() || citation.filePath;
 
   const handleCopy = async () => {
     try {
@@ -163,142 +112,173 @@ function CitationDrawerImpl({ citation, repository, onClose }: CitationDrawerPro
   const lines = citation.text ? citation.text.split("\n") : [];
 
   return (
-    <>
-      {/* Backdrop for click-outside dismissal */}
-      <div
-        className="fixed inset-0 z-40 bg-black/50 backdrop-blur-xs transition-opacity"
-        onClick={onClose}
-        aria-hidden="true"
-      />
-
-      <div className="fixed inset-y-0 right-0 z-50 w-full max-w-xl bg-[#0d0d10] border-l border-zinc-850 shadow-2xl flex flex-col animate-in slide-in-from-right duration-200">
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-900 bg-zinc-950/40">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-zinc-900 border border-zinc-800 text-teal-400 shrink-0">
-              <FileCode className="h-4.5 w-4.5" />
-            </div>
-            <div className="min-w-0">
-              <h3 className="text-xs font-bold text-white truncate max-w-[280px]">
-                {fileName}
-              </h3>
-              <div className="flex items-center gap-2 mt-0.5">
-                <span className="text-[10px] text-zinc-400 font-mono">
-                  Lines {citation.startLine} - {citation.endLine}
-                </span>
-                {citation.symbolName ? (
-                  <span className="text-[9px] px-1.5 py-0.2 rounded bg-zinc-850 border border-zinc-750 text-teal-300 font-mono truncate max-w-[150px]">
-                    {citation.symbolName}
-                  </span>
-                ) : (
-                  <span className="text-[9px] px-1.5 py-0.2 rounded bg-zinc-900 text-zinc-500 font-mono">
-                    module context
-                  </span>
-                )}
-                {repository && (
-                  <span className="text-[9px] text-zinc-500 font-mono truncate max-w-[120px]">
-                    {repository.owner}/{repository.name}
-                  </span>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-1 shrink-0">
+    <Drawer
+      open
+      onClose={onClose}
+      title={fileName}
+      badge={
+        isPlaceholder ? null : (
+          <span className="rounded-[6px] border border-chat-line bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] text-chat-ink-2">
+            Lines {citation.startLine} - {citation.endLine}
+          </span>
+        )
+      }
+      footer={
+        isPlaceholder ? null : (
+          <div className="flex items-center gap-1">
             {githubUrl ? (
               <a
                 href={githubUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="p-1.5 hover:bg-zinc-900 active:scale-90 rounded-lg text-zinc-400 hover:text-white transition flex items-center gap-1 text-xs"
+                className="inline-flex items-center gap-1.5 rounded-[6px] px-2 py-1 text-[12px] text-chat-ink-2 transition-colors duration-150 hover:bg-chat-3 hover:text-chat-ink"
                 title="Open on GitHub"
               >
-                <ExternalLink className="h-4 w-4" />
+                <ExternalLink className="size-4" aria-hidden />
+                <span>GitHub</span>
               </a>
             ) : (
-              <span className="text-[10px] text-zinc-600 px-1">Source unavailable</span>
+              <span className="text-[10px] text-ink-4">Source unavailable</span>
             )}
             <button
+              type="button"
               onClick={handleDownload}
               disabled={downloading || (!citation.text && !repository)}
-              className="p-1.5 hover:bg-zinc-900 active:scale-90 rounded-lg text-zinc-400 hover:text-white transition disabled:opacity-40 cursor-pointer"
+              className="inline-flex cursor-pointer items-center gap-1.5 rounded-[6px] px-2 py-1 text-[12px] text-chat-ink-2 transition-colors duration-150 hover:bg-chat-3 hover:text-chat-ink disabled:pointer-events-none disabled:opacity-40"
               title="Download file"
             >
               {downloading ? (
-                <Loader2 className="h-4 w-4 animate-spin text-teal-400" />
+                <Loader2 className="size-4 animate-spin text-accent" aria-hidden />
               ) : downloaded ? (
-                <Check className="h-4 w-4 text-emerald-400" />
+                <Check className="size-4 text-ok" aria-hidden />
               ) : (
-                <Download className="h-4 w-4" />
+                <Download className="size-4" aria-hidden />
               )}
             </button>
             <button
+              type="button"
               onClick={handleCopy}
               disabled={!citation.text}
-              className="p-1.5 hover:bg-zinc-900 active:scale-90 rounded-lg text-zinc-400 hover:text-white transition disabled:opacity-40 cursor-pointer"
+              className="inline-flex cursor-pointer items-center gap-1.5 rounded-[6px] px-2 py-1 text-[12px] text-chat-ink-2 transition-colors duration-150 hover:bg-chat-3 hover:text-chat-ink disabled:pointer-events-none disabled:opacity-40"
               title="Copy code"
             >
-              {copied ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
-            </button>
-            <button
-              onClick={onClose}
-              className="p-1.5 hover:bg-zinc-900 active:scale-90 rounded-lg text-zinc-500 hover:text-zinc-300 transition cursor-pointer"
-              title="Close drawer (Esc)"
-            >
-              <X className="h-5 w-5" />
+              {copied ? (
+                <Check className="size-4 text-ok" aria-hidden />
+              ) : (
+                <Copy className="size-4" aria-hidden />
+              )}
             </button>
           </div>
-        </div>
-
-        {/* Code Body */}
-        <div className="flex-1 overflow-y-auto p-4 font-mono text-xs bg-[#060608] leading-5">
-          {downloadError && (
-            <div className="mb-3 p-2.5 bg-red-950/20 border border-red-900/30 rounded-lg text-xs text-red-400 flex items-center gap-2 font-sans">
-              <AlertCircle className="h-4 w-4 shrink-0" />
-              <span>{downloadError}</span>
-            </div>
-          )}
-
-          <div className="flex items-center justify-between mb-3 pb-2 border-b border-zinc-900 text-zinc-500">
-            <span className="text-[10px] uppercase font-bold tracking-wider">Source View</span>
-            <span className="text-[10px] font-semibold text-zinc-400 truncate max-w-[320px]">
-              {citation.filePath}
-            </span>
+        )
+      }
+    >
+      <div className="p-3">
+        {isPlaceholder ? (
+          <div className="rounded-[8px] border border-dashed border-chat-line bg-surface-2 p-8 text-center">
+            <BookOpen className="mx-auto mb-2.5 size-6 text-chat-ink-3" aria-hidden />
+            <h3 className="text-sm font-semibold text-chat-ink">No sources cited yet</h3>
+            <p className="mt-1 text-xs leading-relaxed text-chat-ink-2">
+              When the assistant references code from your indexed repository, matching files and line ranges will appear here.
+            </p>
           </div>
+        ) : (
+          <>
+            {allCitations && allCitations.length > 1 && (
+              <div className="mb-3">
+                <div className="mb-1.5 text-[11px] font-semibold text-chat-ink-3">
+                  Sources in this chat ({allCitations.length})
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {allCitations.map((c, idx) => {
+                    const isActive =
+                      c.filePath === citation.filePath &&
+                      c.startLine === citation.startLine &&
+                      c.endLine === citation.endLine;
+                    const pillName = c.filePath.split("/").pop() || c.filePath;
+                    return (
+                      <button
+                        key={`${c.filePath}-${c.startLine}-${idx}`}
+                        type="button"
+                        onClick={() => onSelectCitation?.(c)}
+                        className={cn(
+                          "inline-flex items-center gap-1 rounded-[6px] px-2 py-1 text-[11px] font-medium transition-colors duration-150",
+                          isActive
+                            ? "bg-accent text-white"
+                            : "border border-chat-line bg-surface-2 text-chat-ink-2 hover:bg-surface-3 hover:text-chat-ink",
+                        )}
+                      >
+                        <span>{pillName}</span>
+                        <span className="font-mono text-[9.5px] opacity-75">
+                          :{c.startLine}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
-          {!citation.text || lines.length === 0 ? (
-            <div className="p-8 text-center border border-dashed border-zinc-850 rounded-xl bg-zinc-950/30">
-              <AlertCircle className="h-5 w-5 text-zinc-500 mx-auto mb-2" />
-              <p className="text-xs text-zinc-400 font-sans">
-                Snippet content unavailable for this citation.
-              </p>
-            </div>
-          ) : (
-            <div className="rounded-lg border border-zinc-850 bg-[#0a0a0c] overflow-hidden">
-              <pre className="p-3 text-zinc-200 overflow-x-auto select-text font-mono text-xs">
-                <table className="border-collapse w-full">
-                  <tbody>
-                    {lines.map((line, idx) => {
-                      const lineNumber = citation.startLine + idx;
-                      return (
-                        <tr key={idx} className="hover:bg-zinc-900/50">
-                          <td className="pr-3 pl-1 text-right select-none text-zinc-600 font-mono text-[11px] w-8">
-                            {lineNumber}
+            {downloadError && (
+              <div className="mb-3 flex items-center gap-2 rounded-[6px] border border-danger-soft bg-danger-soft p-2.5 text-xs text-danger">
+                <AlertCircle className="size-4 shrink-0" aria-hidden />
+                <span>{downloadError}</span>
+              </div>
+            )}
+
+            <div className="rounded-[6px] border border-chat-line bg-chat-2 p-3 shadow-card">
+              <div className="truncate text-[12px] font-bold tracking-[-0.02em] text-chat-ink">
+                {fileName}
+              </div>
+              <div className="mt-0.5 break-all font-mono text-[10px] text-chat-ink-3">
+                {citation.filePath}
+              </div>
+              <div className="mt-1.5 flex items-center gap-2 text-[10px] text-chat-ink-2">
+                <span>
+                  Lines {citation.startLine} &ndash; {citation.endLine}
+                </span>
+                <span className="truncate rounded-[4px] border border-chat-line bg-surface-2 px-1.5 py-0.5 font-mono text-chat-ink-3">
+                  {citation.symbolName ?? "module context"}
+                </span>
+                {repository && (
+                  <span className="truncate font-mono text-chat-ink-3">
+                    {repository.owner}/{repository.name}
+                  </span>
+                )}
+              </div>
+
+              {!citation.text || lines.length === 0 ? (
+                <div className="mt-3 rounded-[6px] border border-dashed border-chat-line bg-surface-2 p-8 text-center">
+                  <AlertCircle className="mx-auto mb-2 size-5 text-chat-ink-3" aria-hidden />
+                  <p className="text-xs text-chat-ink-2">
+                    Snippet content unavailable for this citation.
+                  </p>
+                </div>
+              ) : (
+                <div className="code-surface mt-2.5 overflow-x-auto rounded-[6px]">
+                  <table className="w-full border-collapse">
+                    <tbody>
+                      {lines.map((line, idx) => (
+                        <tr key={idx} className="hover:bg-white/5">
+                          <td
+                            className="w-8 select-none border-r border-code-line py-px pl-2 pr-2 text-right font-mono text-[11px] leading-[1.7]"
+                            style={{ color: "var(--code-comment)" }}
+                          >
+                            {citation.startLine + idx}
                           </td>
-                          <td className="pl-3 border-l border-zinc-850 whitespace-pre">
-                            <code>{highlightCodeLine(line)}</code>
+                          <td className="whitespace-pre px-2 font-mono text-[11px] leading-[1.7]">
+                            <code>{highlightLine(line)}</code>
                           </td>
                         </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </pre>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
-          )}
-        </div>
+          </>
+        )}
       </div>
-    </>
+    </Drawer>
   );
 }
 

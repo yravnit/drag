@@ -2,12 +2,14 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth/server";
 import { db } from "@/db/db";
 import { conversations } from "@/db/schema";
-import { and, eq, desc } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { assertRepositoryAssociation } from "@/lib/access/repositoryAccess";
 
 /**
  * GET /api/conversations?repositoryId=xxx
- * Lists all conversations for the given repository associated with the authenticated user.
+ * Lists all conversations for the given repository associated with the authenticated user,
+ * in the user's own drag-and-drop order (ascending sortOrder). `id` is the tiebreak so the
+ * order is total and cannot wobble between requests that carry equal sortOrder values.
  */
 export async function GET(request: Request) {
   try {
@@ -27,7 +29,7 @@ export async function GET(request: Request) {
       .select()
       .from(conversations)
       .where(and(eq(conversations.userId, session.user.id), eq(conversations.repositoryId, repositoryId)))
-      .orderBy(desc(conversations.createdAt));
+      .orderBy(asc(conversations.sortOrder), asc(conversations.id));
 
     return NextResponse.json(list);
   } catch (error) {
@@ -79,6 +81,14 @@ export async function POST(request: Request) {
         userId: session.user.id,
         repositoryId,
         title: finalTitle,
+        // Land at the end of this user's list for this repository. One statement, so there is no
+        // read-then-write window for a concurrent create to slip through and reuse a position.
+        sortOrder: sql`(
+          select coalesce(max(${conversations.sortOrder}), -1) + 1
+          from ${conversations}
+          where ${conversations.userId} = ${session.user.id}
+            and ${conversations.repositoryId} = ${repositoryId}
+        )`,
       })
       .returning();
 

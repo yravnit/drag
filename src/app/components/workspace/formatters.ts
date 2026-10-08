@@ -21,7 +21,6 @@ export function formatLimit(val?: number | null): string {
   return val.toLocaleString();
 }
 
-
 export function formatRelativeSyncTime(timestamp?: string | Date | null): string | null {
   if (!timestamp) return null;
   const date = typeof timestamp === "string" ? new Date(timestamp) : timestamp;
@@ -45,4 +44,12 @@ export function formatRelativeSyncTime(timestamp?: string | Date | null): string
   const diffDays = Math.floor(diffHours / 24);
   if (diffDays === 1) return "Synced yesterday";
   return `Synced ${diffDays} days ago`;
+}
+
+/** Clock time for a message stamp. Null when the row carries no usable timestamp. */
+export function formatClockTime(timestamp?: string | Date | null): string | null {
+  if (!timestamp) return null;
+  const date = typeof timestamp === "string" ? new Date(timestamp) : timestamp;
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }

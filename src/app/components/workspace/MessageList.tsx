@@ -11,10 +11,17 @@ interface MessageListProps {
   error?: string | null;
   onCitationClick: (citation: Citation) => void;
   onSuggestionClick?: (prompt: string) => void;
+  onEditMessage?: (content: string, messageId?: string) => void;
   onRetryMessage?: (message: ChatMessage) => void;
 }
 
 const PIN_THRESHOLD_PX = 80;
+
+const SUGGESTED_PROMPTS = [
+  "Where are API routes defined and how are they protected?",
+  "How does repository chunking and tree-sitter parsing work?",
+  "Explain the database schema and relationship models.",
+];
 
 function MessageListImpl({
   messages,
@@ -22,6 +29,7 @@ function MessageListImpl({
   error,
   onCitationClick,
   onSuggestionClick,
+  onEditMessage,
   onRetryMessage,
 }: MessageListProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -48,7 +56,7 @@ function MessageListImpl({
       frameRef.current = null;
       const el = containerRef.current;
       // Reading scrollHeight flushes layout, so this is the height after the newest chunk.
-      if (el) el.scrollTop = el.scrollHeight;
+      if (el && isNearBottomRef.current) el.scrollTop = el.scrollHeight;
     });
   }, [messages]);
 
@@ -63,53 +71,51 @@ function MessageListImpl({
 
   if (isLoading) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
-        <Loader2 className="h-7 w-7 animate-spin text-teal-400 mb-2" />
-        <p className="text-xs text-zinc-400">Loading conversation history...</p>
+      <div className="flex flex-1 flex-col items-center justify-center p-8 text-center">
+        <Loader2 className="mb-2 size-7 animate-spin text-accent" aria-hidden />
+        <p className="text-xs text-chat-ink-3">Loading conversation history...</p>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
-        <div className="h-10 w-10 rounded-xl bg-red-950/40 border border-red-900/50 flex items-center justify-center text-red-400 mb-3">
-          <AlertCircle className="h-5 w-5" />
+      <div className="flex flex-1 flex-col items-center justify-center p-8 text-center">
+        <div className="mb-3 flex size-10 items-center justify-center rounded-card border border-danger-soft bg-danger-soft text-danger">
+          <AlertCircle className="size-5" aria-hidden />
         </div>
-        <p className="text-sm font-semibold text-zinc-200">Failed to load messages</p>
-        <p className="text-xs text-red-400 mt-1 max-w-sm">{error}</p>
+        <p className="text-sm font-semibold text-chat-ink">Failed to load messages</p>
+        <p className="mt-1 max-w-sm text-xs text-danger">{error}</p>
       </div>
     );
   }
 
   if (messages.length === 0) {
-    const suggestedPrompts = [
-      "Where are API routes defined and how are they protected?",
-      "How does repository chunking and tree-sitter parsing work?",
-      "Explain the database schema and relationship models.",
-    ];
-
     return (
-      <div className="flex-1 flex flex-col items-center justify-center text-center p-6 max-w-lg mx-auto">
-        <div className="h-12 w-12 rounded-2xl bg-zinc-900 border border-zinc-800 flex items-center justify-center text-teal-400 mb-4 shadow">
-          <Bot className="h-6 w-6" />
+      <div className="mx-auto flex max-w-lg flex-1 flex-col items-center justify-center p-6 text-center">
+        <div className="mb-4 flex size-12 items-center justify-center rounded-card border border-chat-line bg-surface text-accent shadow-card">
+          <Bot className="size-6" aria-hidden />
         </div>
-        <h3 className="font-bold text-zinc-100 text-sm">Start Chatting with Codebase</h3>
-        <p className="text-xs text-zinc-400 mt-1 leading-relaxed">
-          Ask questions about function relationships, logic flow, architecture, or configuration in this repository.
+        <h3 className="text-sm font-bold text-chat-ink">Start Chatting with Codebase</h3>
+        <p className="mt-1 text-xs leading-relaxed text-chat-ink-3">
+          Ask questions about function relationships, logic flow, architecture, or configuration in
+          this repository.
         </p>
 
         {onSuggestionClick && (
-          <div className="mt-6 w-full space-y-2">
-            <span className="text-[10px] uppercase font-bold text-zinc-500 tracking-wider">Suggested Questions</span>
-            <div className="space-y-1.5 mt-2">
-              {suggestedPrompts.map((prompt, idx) => (
+          <div className="mt-6 w-full">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-ink-4">
+              Suggested Questions
+            </span>
+            <div className="mt-2 flex flex-wrap justify-center gap-2">
+              {SUGGESTED_PROMPTS.map((prompt) => (
                 <button
-                  key={idx}
+                  key={prompt}
+                  type="button"
                   onClick={() => onSuggestionClick(prompt)}
-                  className="w-full text-left px-3.5 py-2.5 rounded-xl border border-zinc-850 hover:border-zinc-600 active:scale-[0.99] bg-zinc-900/40 hover:bg-zinc-900 text-xs text-zinc-300 hover:text-zinc-100 transition cursor-pointer"
+                  className="cursor-pointer rounded-chip border border-chat-line bg-surface px-3 py-1.5 text-left text-xs text-chat-ink-2 transition-colors duration-150 hover:border-accent hover:bg-surface-2 hover:text-chat-ink active:scale-[0.98]"
                 >
-                  &ldquo;{prompt}&rdquo;
+                  {prompt}
                 </button>
               ))}
             </div>
@@ -123,7 +129,7 @@ function MessageListImpl({
     <div
       ref={containerRef}
       onScroll={handleScroll}
-      className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6"
+      className="scroll-thin flex-1 space-y-7 overflow-y-auto px-4 py-5 min-[901px]:px-14 min-[901px]:py-8"
     >
       {messages.map((msg) => (
         <MessageBubble
@@ -131,6 +137,7 @@ function MessageListImpl({
           message={msg}
           onCitationClick={onCitationClick}
           onRetry={onRetryMessage ? () => onRetryMessage(msg) : undefined}
+          onEdit={onEditMessage ? (content, id) => onEditMessage(content, id) : undefined}
         />
       ))}
     </div>

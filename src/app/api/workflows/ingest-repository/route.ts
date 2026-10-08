@@ -13,7 +13,7 @@ import {
 } from "@/lib/plans/entitlements";
 import { getDefaultEmbeddingMetadataForVisibility } from "@/lib/embeddings/router";
 import { repositories, userRepositories } from "@/db/schema";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 
 import { db, type Database } from "@/db/db";
 
@@ -346,6 +346,13 @@ export async function POST(request: Request) {
           await tx.insert(userRepositories).values({
             userId: session.user.id,
             repositoryId: targetRepoId,
+            // Land at the end of this user's list, derived inside the same statement and the
+            // same limit-check transaction, so a concurrent add cannot reuse a position.
+            sortOrder: sql`(
+              select coalesce(max(${userRepositories.sortOrder}), -1) + 1
+              from ${userRepositories}
+              where ${userRepositories.userId} = ${session.user.id}
+            )`,
           });
         }
 

@@ -39,7 +39,7 @@ vi.mock("../components/workspace/ConfirmDialog", () => ({
   ConfirmDialog: () => null,
 }));
 
-import Home from "../page";
+import Home from "../workspace/page";
 
 type Route = () => Promise<unknown>;
 
@@ -205,5 +205,81 @@ describe("workspace request scoping", () => {
     // before it sets loading state, or this thread shows a spinner forever.
     expect(shellProps.messagesLoading).toBe(false);
     expect(shellProps.messages.map((m) => m.content)).toEqual(["first thread"]);
+  });
+
+  it("does not reload old repository conversations when repository is switched during stream", async () => {
+    stubCommonRoutes();
+    const repo1Convs = [{ id: "c1", title: "Repo 1 Thread", repositoryId: "repo-1" }];
+    const repo2Convs = [{ id: "c2", title: "Repo 2 Thread", repositoryId: "repo-2" }];
+
+    let repo1FetchCount = 0;
+    routes["/api/conversations"] = async () => repo1Convs;
+    routes["/api/conversations/c1/messages"] = async () => [];
+
+    const streamDone = deferred<void>();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const fullUrl = String(url);
+        const path = fullUrl.split("?")[0];
+        if (path === "/api/chat") {
+          return {
+            ok: true,
+            body: new ReadableStream({
+              start(controller) {
+                controller.enqueue(new TextEncoder().encode("streaming answer"));
+                void streamDone.promise.then(() => controller.close());
+              },
+            }),
+          } as unknown as Response;
+        }
+        if (path === "/api/conversations") {
+          if (fullUrl.includes("repositoryId=repo-1")) {
+            repo1FetchCount++;
+            return { ok: true, json: async () => repo1Convs } as unknown as Response;
+          }
+          if (fullUrl.includes("repositoryId=repo-2")) {
+            return { ok: true, json: async () => repo2Convs } as unknown as Response;
+          }
+        }
+        const route = routes[path];
+        if (!route) throw new Error(`unrouted fetch: ${url}`);
+        void init;
+        return { ok: true, json: async () => route() } as unknown as Response;
+      }),
+    );
+
+    await mount();
+    await act(async () => {
+      shellProps.onSelectRepo(REPO_ONE);
+    });
+    await act(async () => {
+      shellProps.onSelectConversation(repo1Convs[0]);
+    });
+
+    await act(async () => {
+      shellProps.onMessageChange("hello world");
+    });
+    await act(async () => {
+      void shellProps.onSendMessage({ preventDefault: () => {} });
+    });
+
+    expect(repo1FetchCount).toBe(1);
+
+    // Switch to REPO_TWO while stream is in flight
+    await act(async () => {
+      shellProps.onSelectRepo(REPO_TWO);
+    });
+
+    expect(shellProps.conversations).toEqual(repo2Convs);
+
+    // Complete the stream
+    await act(async () => {
+      streamDone.resolve();
+    });
+
+    // Old repo 1 conversations should not have been re-fetched or replaced repo 2's list
+    expect(repo1FetchCount).toBe(1);
+    expect(shellProps.conversations).toEqual(repo2Convs);
   });
 });

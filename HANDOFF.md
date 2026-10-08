@@ -582,5 +582,37 @@ Found with one-off `--no-save` installs of **knip** 6.40.0, **dependency-cruiser
 - `.well-known/workflow/v1/**/route.js` files are reported as orphans by dependency-cruiser. They are `workflow` SDK build output, gitignored, and registered as real routes in the Next.js build. **Not dead code.**
 - `npm ci` and the lockfile's internal consistency are pre-existing problems, documented in section 9. Left alone deliberately: regenerating the lock re-resolves `better-auth` and breaks five route files.
 
+---
+
+## 12. Workspace UI cleanup, font unification, and composer layout (2026-10-08)
+
+The following workspace and design improvements were implemented:
+
+- **Repository search shortcut:** `src/components/ui/Kbd.tsx` displays `Ctrl K` on Windows and non-Apple platforms instead of the Windows glyph.
+- **Sidebar plan section simplified:** `src/app/components/workspace/Sidebar.tsx` removed the cluttered plan name, repository and query counts ("Infinite"), and "v1.1 · Beta" tags. Replaced with a clean, single `Plan & usage` action button that triggers `PlanUsageModal`.
+- **Elimination of `/select` route:** Fully removed `src/app/select/` route and all buttons or links pointing to it (including "Browse Github repositories"), centralizing repo management into the workspace.
+- **Font system:** Preserved Ethnocentric (`--font-brand`, `font-brand` at `src/app/fonts/ethnocentric/`) specifically for the DRAG wordmark and watermark. Audited all other text to ensure no third font is used:
+  1. Manrope (`--font-sans`): body, UI, buttons, and general text.
+  2. Nohemi (`--font-display`): display headings with expanded letter spacing.
+  3. Fira Code (`--font-mono`): code snippets, line numbers, and monospace chips.
+  4. Ethnocentric (`--font-brand`): dedicated solely to DRAG logo branding.
+- **Display font letter spacing expansion:** Expanded `--tracking-display` from `-0.05em` to `0.03em` in `src/app/globals.css`. Bound letter spacing directly into `@utility font-display` so any heading using `font-display` inherits the open spacing. Removed hardcoded negative tracking (`tracking-[-0.05em]`, `tracking-[-0.03em]`) across the workspace and landing pages.
+- **Composer layout re-architecture:** Restructured `src/app/components/workspace/Composer.tsx` into a vertical column. The chat textarea is positioned on top with a comfortable `min-h-[52px]` and full width, while the bottom toolbar cleanly separates controls: `ModelSelector` on the bottom-left, and voice input plus send buttons on the bottom-right.
+
+---
+
+## 13. Modal sizing parity, focus ring cleanup, and in-place message editing (2026-10-08)
+
+The following improvements were implemented across workspace components and API routes:
+
+- **Modal sizing and viewport alignment:** Updated `src/components/ui/Modal.tsx` to conditionally apply `max-w-lg` only when no custom `max-w-*` class is provided, avoiding utility class conflicts in Tailwind v4. Centered modals with viewport padding and set dialogs to flex column layout with `flex-1 min-h-0 overflow-y-auto` scroll areas. Updated both `PlanUsageModal.tsx` and `AddRepoModal.tsx` to consistent dimensions (`max-w-4xl h-[82vh] max-h-[780px] min-h-[580px]`), giving plan cards and the repository picker comfortable breathing room.
+- **Focus outline cleanup:** Removed intrusive global outline rules for `input:focus-visible` and `textarea:focus-visible` in `src/app/globals.css`. Updated `src/app/components/workspace/Composer.tsx` to ensure the chat textarea renders without inner focus boxes. Updated `src/app/components/workspace/Sidebar.tsx` and `src/app/components/workspace/ConversationList.tsx` to eliminate multiple concentric focus rings on the search bars, keeping a single clean accent border.
+- **In-place user message editing:** Updated `src/app/components/workspace/MessageBubble.tsx` so clicking Edit turns the user prompt into an inline textarea with Save and Cancel controls, rather than copying text down to the composer. The inline textarea uses neutral border styling with no focus outline lines. Pressing Escape cancels, and Enter saves the edit.
+- **Message update persistence:** Added `PATCH /api/conversations/[id]/messages` in `src/app/api/conversations/[id]/messages/route.ts` with user authorization checks and unit tests. Updated `src/app/workspace/page.tsx` to optimistically update message state and persist edits to Neon PostgreSQL.
+- **Sidebar width and metadata contrast:** Increased desktop sidebar width in `src/app/components/workspace/Sidebar.tsx` to 304px (and mobile to 325px), allowing search placeholder text and shortcut badges to fit without truncation. Elevated repository metadata contrast in `src/app/components/workspace/RepoList.tsx` by upgrading branch name to `font-mono font-medium text-ink`, size and sync times to `text-ink-2`, and separating with distinct midpoint dots.
+- **Enterprise plan header:** Removed the building icon next to the Enterprise plan header in `src/app/components/workspace/PlanUsageModal.tsx`, aligning it with the clean typography of the Free and Hobby cards.
+
+
+
 
 

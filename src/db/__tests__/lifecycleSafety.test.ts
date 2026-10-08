@@ -145,6 +145,26 @@ describe("Production Database Safety & Lifecycle Audit (5B)", () => {
       expect(messages.citations).toBeDefined();
     });
 
+    it("defines a persisted sort_order on user_repositories and conversations", () => {
+      // Both lists are drag-reorderable, so the position must survive a reload. Defaulting to 0
+      // means every row that predates the column still orders, and `notNull` keeps the tiebreak
+      // on id the only thing that has to break a tie.
+      for (const table of [userRepositories, conversations]) {
+        expect(table.sortOrder).toBeDefined();
+        expect(table.sortOrder.notNull).toBe(true);
+        expect(table.sortOrder.default).toBe(0);
+        // snakeCase.table maps the camelCase property onto the snake_case column.
+        expect(table.sortOrder.name).toBe("sort_order");
+      }
+    });
+
+    it("keys repository ordering on the association, not on the shared repositories row", () => {
+      // repositories rows are shared between users (keyed by github_id), so a sort_order there
+      // would be one user's preference applied to everybody.
+      expect(repositories).not.toHaveProperty("sortOrder");
+      expect(getTableConfig(userRepositories).columns.map((c) => c.name)).toContain("sort_order");
+    });
+
     it("constrains messages.status to the four known lifecycle values", () => {
       const config = getTableConfig(messages);
       const statusCheck = config.checks.find((c) => c.name === "messages_status_check");

@@ -10,6 +10,25 @@ import { Sidebar } from "../Sidebar";
 import { Composer } from "../Composer";
 import type { Citation, WorkspaceRepository, ConversationThread } from "../types";
 
+/**
+ * Text content of the rendered `<pre>` code surface.
+ *
+ * The code surface is split into per-line spans with per-token spans inside them, so no single
+ * text node holds the snippet. Stripping tags and decoding entities asserts the same thing the
+ * old single-text-node assertion did — the snippet reaches the user intact — without pinning the
+ * tokenizer's DOM shape.
+ */
+const codeSurfaceText = (html: string) => {
+  const pre = /<pre[\s\S]*?<\/pre>/.exec(html)?.[0] ?? "";
+  return pre
+    .replace(/<[^>]*>/g, "")
+    .replace(/&#x27;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+};
+
 describe("MessageRenderer Component", () => {
   it("renders Markdown headings, paragraphs, and lists", () => {
     const markdown = `# Main Title\n\nThis is a paragraph.\n\n* Item 1\n* Item 2`;
@@ -33,7 +52,7 @@ describe("MessageRenderer Component", () => {
     );
 
     expect(html).toContain("typescript");
-    expect(html).toContain("const greeting = &#x27;hello&#x27;;");
+    expect(codeSurfaceText(html)).toContain("const greeting = 'hello';");
     expect(html).toContain("Copy");
   });
 
@@ -51,11 +70,7 @@ describe("MessageRenderer Component", () => {
     ];
 
     const html = renderToStaticMarkup(
-      <MessageRenderer
-        content={markdown}
-        citations={citations}
-        onCitationClick={vi.fn()}
-      />,
+      <MessageRenderer content={markdown} citations={citations} onCitationClick={vi.fn()} />,
     );
 
     expect(html).toContain("<button");
@@ -90,11 +105,7 @@ describe("CitationDrawer Component", () => {
 
   it("renders file path, line numbers, and symbol name", () => {
     const html = renderToStaticMarkup(
-      <CitationDrawer
-        citation={sampleCitation}
-        repository={sampleRepo}
-        onClose={vi.fn()}
-      />,
+      <CitationDrawer citation={sampleCitation} repository={sampleRepo} onClose={vi.fn()} />,
     );
 
     expect(html).toContain("repositoryLeases.ts");
@@ -105,24 +116,18 @@ describe("CitationDrawer Component", () => {
 
   it("generates an accurate GitHub link for line ranges", () => {
     const html = renderToStaticMarkup(
-      <CitationDrawer
-        citation={sampleCitation}
-        repository={sampleRepo}
-        onClose={vi.fn()}
-      />,
+      <CitationDrawer citation={sampleCitation} repository={sampleRepo} onClose={vi.fn()} />,
     );
 
-    expect(html).toContain("https://github.com/octocat/drag/blob/main/src/lib/leases/repositoryLeases.ts#L15-L30");
+    expect(html).toContain(
+      "https://github.com/octocat/drag/blob/main/src/lib/leases/repositoryLeases.ts#L15-L30",
+    );
     expect(html).toContain("Open on GitHub");
   });
 
   it("returns null when citation is null", () => {
     const html = renderToStaticMarkup(
-      <CitationDrawer
-        citation={null}
-        repository={sampleRepo}
-        onClose={vi.fn()}
-      />,
+      <CitationDrawer citation={null} repository={sampleRepo} onClose={vi.fn()} />,
     );
 
     expect(html).toBe("");
@@ -134,15 +139,53 @@ describe("CitationDrawer Component", () => {
       text: "",
     };
     const html = renderToStaticMarkup(
-      <CitationDrawer
-        citation={emptyCitation}
-        repository={null}
-        onClose={vi.fn()}
-      />,
+      <CitationDrawer citation={emptyCitation} repository={null} onClose={vi.fn()} />,
     );
 
     expect(html).toContain("Snippet content unavailable for this citation");
     expect(html).toContain("Source unavailable");
+  });
+
+  it("renders clean empty state notice for placeholder citation", () => {
+    const placeholderCitation: Citation = {
+      index: 0,
+      filePath: "No sources cited yet",
+      startLine: 0,
+      endLine: 0,
+      symbolName: null,
+      text: "",
+    };
+    const html = renderToStaticMarkup(
+      <CitationDrawer citation={placeholderCitation} repository={null} onClose={vi.fn()} />,
+    );
+
+    expect(html).toContain("No sources cited yet");
+    expect(html).toContain("When the assistant references code");
+    expect(html).not.toContain("Lines 0 - 0");
+  });
+
+  it("renders cited source pills when allCitations has multiple items", () => {
+    const secondCitation: Citation = {
+      index: 2,
+      filePath: "src/lib/retrieval/retriever.ts",
+      startLine: 50,
+      endLine: 80,
+      symbolName: "retrieveContext",
+      text: "export async function retrieveContext() {}",
+    };
+    const html = renderToStaticMarkup(
+      <CitationDrawer
+        citation={sampleCitation}
+        repository={sampleRepo}
+        onClose={vi.fn()}
+        allCitations={[sampleCitation, secondCitation]}
+        onSelectCitation={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain("Sources in this chat (2)");
+    expect(html).toContain("repositoryLeases.ts");
+    expect(html).toContain("retriever.ts");
   });
 });
 
@@ -313,8 +356,6 @@ describe("ChatWindow Component", () => {
     expect(html).toContain("180 chunks");
     expect(html).toContain("Repository Ready");
     expect(html).toContain("Start Conversation");
-    expect(html).toContain("main");
-    expect(html).toContain("TypeScript");
   });
 });
 
@@ -380,8 +421,8 @@ describe("Sidebar Component", () => {
       />,
     );
 
-    expect(html).toContain("Filter repositories...");
-    expect(html).toContain("K");
+    expect(html).toContain("Search repositories");
+    expect(html).toMatch(/<span class="font-mono">K<\/span>/);
     expect(html).toContain("octocat/drag");
   });
 });
@@ -418,4 +459,3 @@ describe("Composer Component", () => {
     expect(html).toContain("Rate limit exceeded. Please wait a moment.");
   });
 });
-

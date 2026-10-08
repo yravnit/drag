@@ -1,4 +1,4 @@
-import { uuid, text, timestamp, index, snakeCase } from "drizzle-orm/pg-core";
+import { uuid, text, timestamp, index, integer, snakeCase } from "drizzle-orm/pg-core";
 import { user } from "./auth";
 import { repositories } from "./repository";
 
@@ -18,6 +18,8 @@ export const conversations = snakeCase.table(
       .defaultNow()
       .$onUpdate(() => new Date())
       .notNull(),
+    // Thread ordering is per (user, repository) — the only list GET /api/conversations serves.
+    sortOrder: integer().default(0).notNull(),
   },
   (table) => [
     index("conversations_user_id_idx").on(table.userId),

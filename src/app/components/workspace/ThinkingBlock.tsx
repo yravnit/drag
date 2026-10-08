@@ -2,6 +2,7 @@
 
 import React, { useState } from "react";
 import { ChevronRight } from "lucide-react";
+import { cn } from "@/lib/cn";
 
 interface ThinkingBlockProps {
   thinking: string;
@@ -19,26 +20,28 @@ export function ThinkingBlock({
   const isThinkingActive = isStreaming && !hasAnswer;
 
   return (
-    <div className="mb-3">
+    <div>
       <button
         type="button"
         onClick={() => setIsExpanded((prev) => !prev)}
-        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-900/60 hover:bg-zinc-850 active:scale-95 border border-zinc-800 text-xs font-mono transition cursor-pointer select-none"
+        className="inline-flex cursor-pointer select-none items-center gap-1.5 rounded-[6px] border border-chat-line bg-surface-2 px-2.5 py-1 text-xs transition-colors duration-150 hover:bg-surface-3 active:scale-[0.96]"
         title={isExpanded ? "Collapse thinking" : "Expand thinking"}
         aria-expanded={isExpanded}
       >
         <ChevronRight
-          className={`h-3 w-3 text-zinc-500 transition-transform duration-150 ${
-            isExpanded ? "rotate-90 text-teal-400" : ""
-          }`}
+          className={cn(
+            "size-3 text-chat-ink-3 transition-transform duration-150",
+            isExpanded && "rotate-90 text-accent",
+          )}
+          aria-hidden
         />
-        <span className="thinking-linear-shimmer font-medium tracking-wide">
+        <span className="thinking-linear-shimmer font-semibold tracking-wide">
           {isThinkingActive ? "Thinking..." : "Thinking"}
         </span>
       </button>
 
       {isExpanded && (
-        <div className="mt-2 pl-3 border-l-2 border-zinc-800 text-xs text-zinc-400 font-mono whitespace-pre-wrap leading-relaxed max-h-60 overflow-y-auto bg-zinc-950/60 p-3 rounded-r">
+        <div className="mt-2 max-h-60 overflow-y-auto rounded-r-[6px] border-l-2 border-chat-line bg-chat-2 p-3 pl-3 font-mono text-xs leading-relaxed whitespace-pre-wrap text-chat-ink-2">
           {thinking}
         </div>
       )}

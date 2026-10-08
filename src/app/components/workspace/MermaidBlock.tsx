@@ -2,14 +2,18 @@
 
 import { useEffect, useState } from "react";
 import { AlertTriangle, Code2, Eye, Loader2, ZoomIn, ZoomOut } from "lucide-react";
+import { IconButton } from "@/components/ui/IconButton";
 import { sanitizeMermaidSvg } from "@/lib/mermaid/sanitizeMermaid";
 import { normalizeMermaid } from "@/lib/mermaid/normalizeMermaid";
 import { CopyCodeButton } from "./CopyCodeButton";
+import { highlightCode } from "@/lib/highlight";
 
 interface MermaidBlockProps {
   chart: string;
   id: string;
   streaming?: boolean;
+  /** Header label. The markdown pipeline has no title to pass, so this stays at the default. */
+  title?: string;
 }
 
 /**
@@ -34,7 +38,7 @@ const THEME = {
     clusterBkg: "#09090b",
     clusterBorder: "#27272a",
     edgeLabelBackground: "#0a0a0a",
-    fontFamily: "var(--font-manrope)",
+    fontFamily: "Manrope, ui-sans-serif, system-ui, sans-serif",
     fontSize: "14px",
   },
 } as const;
@@ -47,7 +51,12 @@ const DEFAULT_ZOOM = 2;
  * Renders the diagram by default and can toggle to the Mermaid source; a chart that
  * fails to compile falls back to the source view plus the parser message.
  */
-export function MermaidBlock({ chart, id, streaming = false }: MermaidBlockProps) {
+export function MermaidBlock({
+  chart,
+  id,
+  streaming = false,
+  title = "Architecture Diagram",
+}: MermaidBlockProps) {
   const [svg, setSvg] = useState<string>("");
   const [naturalWidth, setNaturalWidth] = useState(0);
   const [error, setError] = useState<string>("");
@@ -104,49 +113,64 @@ export function MermaidBlock({ chart, id, streaming = false }: MermaidBlockProps
   const pending = streaming || !svg;
 
   return (
-    <div className="my-3 rounded-lg overflow-hidden border border-zinc-800">
-      <div className="flex items-center gap-1 px-3 py-1.5 bg-zinc-900 text-xs text-zinc-400 font-mono border-b border-zinc-800">
-        <span className="mr-auto">mermaid</span>
-        {pending && <span className="text-zinc-500">rendering…</span>}
-        {showDiagram && !pending && (
-          <>
-            <ZoomButton
-              label="Zoom out"
-              disabled={zoomIdx === 0}
-              onClick={() => setZoomIdx((i) => Math.max(0, i - 1))}
-            >
-              <ZoomOut className="h-3 w-3" />
-            </ZoomButton>
+    <div className="my-3.5 overflow-hidden rounded-card border border-chat-line bg-chat-2 shadow-card">
+      <div className="flex flex-wrap items-center gap-2 border-b border-chat-line bg-chat-3 px-3.5 py-2">
+        <span className="rounded-[6px] bg-accent-soft px-[7px] py-0.5 text-[10px] font-bold uppercase tracking-[0.05em] text-accent-ink">
+          Diagram
+        </span>
+        <span className="text-[12.5px] font-bold tracking-[-0.02em] text-chat-ink">{title}</span>
+
+        <div className="ml-auto flex items-center gap-1.5">
+          {!error && (
             <button
               type="button"
-              onClick={() => setZoomIdx(DEFAULT_ZOOM)}
-              title="Reset zoom"
-              className="px-1.5 py-0.5 rounded text-[11px] tabular-nums hover:text-zinc-200 hover:bg-zinc-800 transition active:scale-95 cursor-pointer"
+              onClick={() => setShowCode((prev) => !prev)}
+              aria-pressed={showCode}
+              className="inline-flex cursor-pointer items-center gap-1.5 rounded-[6px] border border-chat-line bg-chat-2 px-2 py-1 text-[11.5px] font-semibold text-chat-ink-2 transition-colors duration-150 hover:border-accent hover:bg-chat-3 hover:text-chat-ink active:scale-[0.96]"
+              title={showCode ? "Show diagram" : "Show Mermaid source"}
             >
-              {Math.round(zoom * 100)}%
+              {showCode ? (
+                <Eye className="size-3" aria-hidden />
+              ) : (
+                <Code2 className="size-3" aria-hidden />
+              )}
+              <span>{showCode ? "Diagram" : "Code"}</span>
             </button>
-            <ZoomButton
-              label="Zoom in"
-              disabled={zoomIdx === ZOOMS.length - 1}
-              onClick={() => setZoomIdx((i) => Math.min(ZOOMS.length - 1, i + 1))}
-            >
-              <ZoomIn className="h-3 w-3" />
-            </ZoomButton>
-          </>
-        )}
-        {!error && (
-          <button
-            type="button"
-            onClick={() => setShowCode((prev) => !prev)}
-            aria-pressed={showCode}
-            className="flex items-center gap-1 text-[11px] text-zinc-400 hover:text-zinc-200 transition active:scale-95 px-2 py-0.5 rounded hover:bg-zinc-800 cursor-pointer"
-            title={showCode ? "Show diagram" : "Show Mermaid source"}
-          >
-            {showCode ? <Eye className="h-3 w-3" /> : <Code2 className="h-3 w-3" />}
-            <span>{showCode ? "Diagram" : "Code"}</span>
-          </button>
-        )}
-        <CopyCodeButton text={chart} />
+          )}
+
+          {showDiagram && !pending && (
+            <>
+              <IconButton
+                size="sm"
+                aria-label="Zoom out"
+                title="Zoom out"
+                disabled={zoomIdx === 0}
+                onClick={() => setZoomIdx((i) => Math.max(0, i - 1))}
+              >
+                <ZoomOut className="size-3" aria-hidden />
+              </IconButton>
+              <button
+                type="button"
+                onClick={() => setZoomIdx(DEFAULT_ZOOM)}
+                title="Reset zoom"
+                className="min-w-[42px] cursor-pointer rounded-[6px] border border-chat-line bg-chat-2 px-2 py-1 text-[11.5px] font-semibold tabular-nums text-chat-ink-2 transition-colors duration-150 hover:border-accent hover:bg-chat-3 hover:text-chat-ink"
+              >
+                {Math.round(zoom * 100)}%
+              </button>
+              <IconButton
+                size="sm"
+                aria-label="Zoom in"
+                title="Zoom in"
+                disabled={zoomIdx === ZOOMS.length - 1}
+                onClick={() => setZoomIdx((i) => Math.min(ZOOMS.length - 1, i + 1))}
+              >
+                <ZoomIn className="size-3" aria-hidden />
+              </IconButton>
+            </>
+          )}
+
+          <CopyCodeButton text={chart} />
+        </div>
       </div>
 
       {showDiagram ? (
@@ -160,13 +184,13 @@ export function MermaidBlock({ chart, id, streaming = false }: MermaidBlockProps
           </div>
         ) : (
           <div
-            className="flex flex-col items-center justify-center gap-2 p-6 min-h-[10rem] bg-[#0a0a0a]"
+            className="flex min-h-[10rem] flex-col items-center justify-center gap-2 bg-[#0a0a0a] p-6"
             role="status"
             aria-live="polite"
             aria-label={streaming ? "Waiting for diagram" : "Rendering diagram"}
           >
-            <Loader2 className="h-6 w-6 animate-spin text-zinc-500" />
-            <span className="text-[11px] font-mono text-zinc-600">
+            <Loader2 className="size-6 animate-spin text-zinc-500" />
+            <span className="font-mono text-[11px] text-zinc-600">
               {streaming ? "waiting for diagram…" : "rendering…"}
             </span>
           </div>
@@ -175,44 +199,27 @@ export function MermaidBlock({ chart, id, streaming = false }: MermaidBlockProps
         <>
           {error && (
             <div
-              className="flex items-start gap-1.5 px-4 py-1.5 bg-amber-500/10 border-b border-amber-500/20 text-[11px] text-amber-400/90"
+              className="flex items-start gap-1.5 border-b border-chat-line bg-danger-soft px-4 py-2 text-[11px] text-danger"
               title={error}
             >
-              <AlertTriangle className="h-3 w-3 mt-px shrink-0" />
-              <span className="font-sans break-words">{error.split("\n")[0]}</span>
+              <AlertTriangle className="mt-px size-3 shrink-0" aria-hidden />
+              <span className="break-words font-sans">{error.split("\n")[0]}</span>
             </div>
           )}
-          <pre className="p-4 bg-[#0a0a0a] text-zinc-100 font-mono text-xs overflow-x-auto leading-5">
-            <code>{chart}</code>
-          </pre>
+          <div className="p-3">
+            <pre className="m-0 overflow-x-auto">
+              <code className="code-surface block rounded-[10px] p-3.5 text-[12px] leading-[1.6]">
+                {highlightCode(chart).map((nodes, index) => (
+                  <span key={index} className="block">
+                    {nodes}
+                  </span>
+                ))}
+              </code>
+            </pre>
+          </div>
         </>
       )}
     </div>
-  );
-}
-
-function ZoomButton({
-  label,
-  disabled,
-  onClick,
-  children,
-}: {
-  label: string;
-  disabled: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      aria-label={label}
-      title={label}
-      className="flex items-center px-1.5 py-0.5 rounded text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition active:scale-95 disabled:opacity-30 disabled:pointer-events-none cursor-pointer"
-    >
-      {children}
-    </button>
   );
 }
 

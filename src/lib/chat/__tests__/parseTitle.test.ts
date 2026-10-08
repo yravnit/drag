@@ -53,4 +53,18 @@ describe("parseTitle", () => {
     expect(parseTitle('{"title":""}')).toBeNull();
     expect(parseTitle('{"title":"   "}')).toBeNull();
   });
+
+  it("strips reasoning blocks before parsing title", () => {
+    expect(
+      parseTitle(
+        '<think>The user wants to understand OAuth token rotation.\nI should name it Token rotation.\n</think>{"title":"Token rotation"}',
+      ),
+    ).toBe("Token rotation");
+  });
+
+  it("does not use reasoning text as fallback title when tags are unclosed", () => {
+    expect(
+      parseTitle("<think>Let me figure out what the user is asking about."),
+    ).toBeNull();
+  });
 });

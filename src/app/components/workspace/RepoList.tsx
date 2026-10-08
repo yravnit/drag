@@ -1,11 +1,20 @@
 "use client";
 
 import React, { useState } from "react";
-import { Trash2, RotateCcw, Loader2, AlertCircle } from "lucide-react";
+import {
+  AlertCircle,
+  GripVertical,
+  Loader2,
+  RotateCcw,
+  Trash2,
+} from "lucide-react";
+import { cn } from "@/lib/cn";
 import { formatBytes, formatRelativeSyncTime } from "./formatters";
-import type { WorkspaceRepository } from "./types";
+import type { ReorderRepositoriesHandler, WorkspaceRepository } from "./types";
 
-interface RepoListProps {
+type DropPosition = "top" | "bottom";
+
+export interface RepoListProps {
   repositories: WorkspaceRepository[];
   selectedRepo: WorkspaceRepository | null;
   isLoading?: boolean;
@@ -14,6 +23,34 @@ interface RepoListProps {
   onDeleteRepo: (repoId: string) => void | Promise<void>;
   onRetryRepo: (repo: WorkspaceRepository) => void | Promise<void>;
   onOpenAddModal: () => void;
+  onReorderRepositories?: ReorderRepositoriesHandler;
+}
+
+function moveItem<T extends { id: string }>(
+  list: T[],
+  sourceId: string,
+  targetId: string,
+  position: DropPosition,
+): T[] {
+  const sourceIndex = list.findIndex((item) => item.id === sourceId);
+  if (sourceIndex === -1) return list;
+  const rest = list.filter((_, index) => index !== sourceIndex);
+  const targetIndex = rest.findIndex((item) => item.id === targetId);
+  if (targetIndex === -1) return list;
+  const at = position === "top" ? targetIndex : targetIndex + 1;
+  return [...rest.slice(0, at), list[sourceIndex], ...rest.slice(at)];
+}
+
+function DropIndicator({ position }: { position: DropPosition }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "pointer-events-none absolute inset-x-1.5 h-0.5 rounded-full bg-accent",
+        position === "top" ? "-top-px" : "-bottom-px",
+      )}
+    />
+  );
 }
 
 export function RepoList({
@@ -25,9 +62,15 @@ export function RepoList({
   onDeleteRepo,
   onRetryRepo,
   onOpenAddModal,
+  onReorderRepositories,
 }: RepoListProps) {
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState("");
+  const [draggedId, setDraggedId] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ id: string; position: DropPosition } | null>(
+    null,
+  );
+  const canReorder = Boolean(onReorderRepositories);
 
   const runAction = async (repo: WorkspaceRepository, action: "retry" | "delete") => {
     if (pendingId) return;
@@ -49,33 +92,54 @@ export function RepoList({
     }
   };
 
+  const commitOrder = (ordered: WorkspaceRepository[]) => {
+    onReorderRepositories?.(ordered.map((repo) => repo.id));
+  };
+
+  const nudge = (index: number, offset: number) => {
+    const target = index + offset;
+    if (target < 0 || target >= repositories.length) return;
+    const ordered = [...repositories];
+    [ordered[index], ordered[target]] = [ordered[target], ordered[index]];
+    commitOrder(ordered);
+  };
+
+  const clearDrag = () => {
+    setDraggedId(null);
+    setDropTarget(null);
+  };
+
   // Only take over the panel on the first load. A background refetch must not replace the user's
   // list with a spinner and then pop it back — that blink is what made the sidebar look cheap.
   if (isLoading && repositories.length === 0) {
     return (
-      <div className="p-4 text-center">
-        <Loader2 className="h-5 w-5 animate-spin text-teal-400 mx-auto mb-2" />
-        <p className="text-xs text-zinc-500">Loading repositories...</p>
+      <div className="px-3 py-4 text-center">
+        <Loader2 className="mx-auto mb-2 size-5 animate-spin text-accent" aria-hidden />
+        <p className="text-xs text-ink-4">Loading repositories...</p>
       </div>
     );
   }
 
-  if (error) {
+  // Only replaces the list when there is nothing to show. A failed action (a rejected
+  // reorder, say) also lands in `error`, and replacing a populated list with the error
+  // card would hide the very rows the user just tried to reorder.
+  if (error && repositories.length === 0) {
     return (
-      <div className="p-3 bg-red-950/20 border border-red-900/30 rounded-xl text-center">
-        <AlertCircle className="h-4 w-4 text-red-400 mx-auto mb-1" />
-        <p className="text-xs text-red-400">{error}</p>
+      <div className="mx-2 rounded-control border border-danger-soft bg-danger-soft p-3 text-center">
+        <AlertCircle className="mx-auto mb-1 size-4 text-danger" aria-hidden />
+        <p className="text-xs text-danger">{error}</p>
       </div>
     );
   }
 
   if (repositories.length === 0) {
     return (
-      <div className="p-4 text-center border border-dashed border-zinc-900 rounded-xl bg-zinc-950/20">
-        <p className="text-xs text-zinc-500">No repositories indexed.</p>
+      <div className="mx-2 rounded-card border border-dashed border-line bg-surface/60 p-4 text-center">
+        <p className="text-xs text-ink-4">No repositories indexed.</p>
         <button
+          type="button"
           onClick={onOpenAddModal}
-          className="mt-2 text-xs font-semibold text-teal-400 hover:text-teal-300 hover:underline transition active:scale-95 cursor-pointer"
+          className="mt-2 cursor-pointer text-xs font-semibold text-accent-ink transition-colors duration-150 hover:underline active:scale-95"
         >
           Add Repository
         </button>
@@ -84,17 +148,28 @@ export function RepoList({
   }
 
   return (
-    <div className="space-y-1">
+    <div className="space-y-0.5">
+      {error && (
+        <div className="mx-2 mb-1 flex items-start gap-1.5 rounded-control border border-danger-soft bg-danger-soft px-2 py-1.5 text-[11px] text-danger">
+          <AlertCircle className="mt-px size-3 shrink-0" aria-hidden />
+          <span>{error}</span>
+        </div>
+      )}
+
       {actionError && (
-        <div className="mb-1 flex items-start gap-1.5 rounded-lg border border-red-900/40 bg-red-950/20 px-2 py-1.5 text-[11px] text-red-400">
-          <AlertCircle className="mt-px h-3 w-3 shrink-0" />
+        <div className="mx-2 mb-1 flex items-start gap-1.5 rounded-control border border-danger-soft bg-danger-soft px-2 py-1.5 text-[11px] text-danger">
+          <AlertCircle className="mt-px size-3 shrink-0" aria-hidden />
           <span>{actionError}</span>
         </div>
       )}
-      {repositories.map((repo) => {
+
+      {repositories.map((repo, index) => {
         const isSelected = selectedRepo?.id === repo.id;
         const status = repo.embeddingStatus || "processing";
         const isPending = pendingId === repo.id;
+        const isDragging = draggedId === repo.id;
+        const isDropTop = dropTarget?.id === repo.id && dropTarget.position === "top";
+        const isDropBottom = dropTarget?.id === repo.id && dropTarget.position === "bottom";
 
         return (
           <div
@@ -102,104 +177,161 @@ export function RepoList({
             role="button"
             tabIndex={0}
             aria-current={isSelected}
+            draggable={canReorder}
+            onDragStart={(event) => {
+              event.dataTransfer.setData("text/plain", repo.id);
+              event.dataTransfer.effectAllowed = "move";
+              setDraggedId(repo.id);
+            }}
+            onDragEnd={clearDrag}
+            onDragOver={(event) => {
+              if (!draggedId || draggedId === repo.id) return;
+              event.preventDefault();
+              event.dataTransfer.dropEffect = "move";
+              const bounds = event.currentTarget.getBoundingClientRect();
+              setDropTarget({
+                id: repo.id,
+                position: event.clientY - bounds.top < bounds.height / 2 ? "top" : "bottom",
+              });
+            }}
+            onDragLeave={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                setDropTarget((prev) => (prev?.id === repo.id ? null : prev));
+              }
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              if (draggedId && dropTarget && draggedId !== repo.id) {
+                commitOrder(moveItem(repositories, draggedId, repo.id, dropTarget.position));
+              }
+              clearDrag();
+            }}
             onClick={() => !isPending && onSelectRepo(repo)}
-            onKeyDown={(e) => {
+            onKeyDown={(event) => {
               if (isPending) return;
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
                 onSelectRepo(repo);
               }
             }}
-            className={`group relative flex flex-col rounded-xl border p-3 transition cursor-pointer active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/60 ${
+            className={cn(
+              "group relative cursor-pointer rounded-control border border-transparent px-2 py-2 transition-colors duration-150 active:scale-[0.99]",
               isSelected
-                ? "border-teal-500/50 bg-teal-500/10 text-white shadow-xs"
-                : "border-transparent bg-zinc-950/20 text-zinc-400 hover:border-zinc-700 hover:bg-zinc-900/60 hover:text-zinc-100"
-            }`}
+                ? "bg-rail-active text-rail-active-ink"
+                : "text-ink-2 hover:bg-rail-hover hover:text-ink",
+              isDragging && "bg-rail-hover opacity-40",
+            )}
           >
-            <div className="flex items-start justify-between gap-2">
-              <div className="font-semibold text-xs truncate max-w-[170px]">
-                {repo.owner}/{repo.name}
-              </div>
+            {isDropTop && <DropIndicator position="top" />}
+            {isDropBottom && <DropIndicator position="bottom" />}
 
-              <div className="flex items-center gap-1.5 shrink-0">
+            <div className="flex items-center gap-1.5">
+              {canReorder && (
+                <button
+                  type="button"
+                  draggable={false}
+                  tabIndex={0}
+                  aria-label={`Reorder ${repo.owner}/${repo.name}. Press the up or down arrow key to move it.`}
+                  title="Drag to reorder"
+                  onClick={(event) => event.stopPropagation()}
+                  onKeyDown={(event) => {
+                    event.stopPropagation();
+                    const offset =
+                      event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : 0;
+                    if (offset === 0) return;
+                    event.preventDefault();
+                    nudge(index, offset);
+                  }}
+                  className="shrink-0 cursor-grab rounded-[4px] p-0.5 text-ink-4 opacity-60 transition-opacity duration-150 group-hover:opacity-100 hover:bg-surface-2 hover:text-ink-2 focus-visible:opacity-100 active:cursor-grabbing"
+                >
+                  <GripVertical className="size-3.5" aria-hidden />
+                </button>
+              )}
+
+              <span className="min-w-0 flex-1 truncate text-[13px] font-semibold tracking-[-0.02em]">
+                {repo.owner}/{repo.name}
+              </span>
+
+              <div className="flex shrink-0 items-center gap-1">
                 {/* No "ready" dot: it was on for essentially every indexed repo, so it carried no
                     information. Indexing and failure still show a dot because those need watching,
                     and both are also spelled out in the status line below. */}
                 {status === "processing" && (
-                  <span className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" title="Indexing" />
+                  <span
+                    className="size-2 animate-pulse rounded-full bg-amber-500"
+                    title="Indexing"
+                  />
                 )}
                 {status === "failed" && (
                   <div className="flex items-center gap-1">
-                    <span className="h-2 w-2 rounded-full bg-red-500" title="Indexing Failed" />
+                    <span className="size-2 rounded-full bg-danger" title="Indexing failed" />
                     <button
-                      onClick={(e) => {
-                        e.stopPropagation();
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
                         void runAction(repo, "retry");
                       }}
                       disabled={isPending}
                       title="Retry indexing"
                       aria-label={`Retry indexing ${repo.owner}/${repo.name}`}
-                      className="p-1 rounded transition cursor-pointer text-red-400 hover:bg-red-900/40 hover:text-red-300 active:scale-90 disabled:opacity-50"
+                      className="cursor-pointer rounded-[4px] p-0.5 text-danger transition-colors duration-150 hover:bg-danger-soft disabled:opacity-50"
                     >
                       {isPending ? (
-                        <Loader2 className="h-3 w-3 animate-spin" />
+                        <Loader2 className="size-3 animate-spin" aria-hidden />
                       ) : (
-                        <RotateCcw className="h-3 w-3" />
+                        <RotateCcw className="size-3" aria-hidden />
                       )}
                     </button>
                   </div>
                 )}
                 <button
-                  onClick={(e) => {
-                    e.stopPropagation();
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
                     void runAction(repo, "delete");
                   }}
                   disabled={isPending}
                   title="Remove repository"
                   aria-label={`Remove ${repo.owner}/${repo.name}`}
-                  className="p-1 rounded transition cursor-pointer text-zinc-500 hover:bg-zinc-800 hover:text-red-400 active:scale-90 disabled:opacity-50 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100"
+                  className="cursor-pointer rounded-[4px] p-0.5 text-ink-4 transition-[opacity,color,background-color] duration-150 hover:bg-surface-2 hover:text-danger disabled:opacity-50 focus-visible:opacity-100 sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100"
                 >
                   {isPending ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin text-zinc-400" />
+                    <Loader2 className="size-3.5 animate-spin text-ink-3" aria-hidden />
                   ) : (
-                    <Trash2 className="h-3.5 w-3.5" />
+                    <Trash2 className="size-3.5" aria-hidden />
                   )}
                 </button>
               </div>
             </div>
 
-            <div className="flex items-center justify-between text-xs text-zinc-400 mt-1">
-              <div className="flex items-center gap-1.5 truncate">
-                <span>{repo.defaultBranch || "main"}</span>
+            <div
+              className={cn(
+                "mt-1 flex items-center justify-between gap-2 text-xs",
+                isSelected ? "text-ink-2" : "text-ink-2/90",
+              )}
+            >
+              <div className="min-w-0 truncate">
+                <span className="font-mono font-medium text-ink">{repo.defaultBranch || "main"}</span>
                 {repo.totalSizeBytes && formatBytes(repo.totalSizeBytes) && (
-                  <span>· {formatBytes(repo.totalSizeBytes)}</span>
+                  <span>
+                    <span className="text-ink-3"> · </span>
+                    <span className="text-ink-2">{formatBytes(repo.totalSizeBytes)}</span>
+                  </span>
                 )}
                 {formatRelativeSyncTime(repo.indexedAt) && (
-                  <span>· {formatRelativeSyncTime(repo.indexedAt)}</span>
+                  <span>
+                    <span className="text-ink-3"> · </span>
+                    <span className="text-ink-2">{formatRelativeSyncTime(repo.indexedAt)}</span>
+                  </span>
                 )}
               </div>
               {status === "failed" && (
-                <span className="text-red-400 text-[11px] font-medium shrink-0">Failed</span>
+                <span className="shrink-0 text-[11px] font-semibold text-danger">Failed</span>
               )}
               {status === "processing" && (
-                <span className="text-amber-400 text-[11px] font-medium shrink-0">Indexing</span>
+                <span className="shrink-0 text-[11px] font-semibold text-amber-500">Indexing</span>
               )}
             </div>
-
-            {/* Server-provided repository privacy indicator */}
-            {repo.privacyLabel && (
-              <div className="flex items-center gap-1.5 text-[10px] mt-1.5 pt-1.5 border-t border-zinc-900/80 font-sans">
-                <span
-                  className={`px-1.5 py-0.5 rounded text-[9px] font-semibold ${
-                    repo.isPrivate
-                      ? "bg-purple-950/50 text-purple-300 border border-purple-900/50"
-                      : "bg-teal-950/50 text-teal-300 border border-teal-900/50"
-                  }`}
-                >
-                  {repo.privacyLabel}
-                </span>
-              </div>
-            )}
           </div>
         );
       })}

@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { Manrope, Fira_Code } from "next/font/google";
 import localFont from "next/font/local";
+import { ThemeProvider } from "@/components/theme/ThemeProvider";
+import { themeInitScript } from "@/components/theme/theme-init";
 import "./globals.css";
 
 const manrope = Manrope({
@@ -27,6 +29,15 @@ const nohemi = localFont({
   display: "swap",
 });
 
+const ethnocentric = localFont({
+  src: [
+    { path: "./fonts/ethnocentric/Ethnocentric-Regular.ttf", weight: "400", style: "normal" },
+    { path: "./fonts/ethnocentric/Ethnocentric-Italic.ttf", weight: "700", style: "italic" },
+  ],
+  variable: "--font-ethnocentric",
+  display: "swap",
+});
+
 export const metadata: Metadata = {
   title: "DRAG — Developer Repository Augmented Generation",
   description:
@@ -41,9 +52,17 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${manrope.variable} ${nohemi.variable} ${firaCode.variable} h-full antialiased`}
+      data-theme="dark"
+      data-scroll-behavior="smooth"
+      suppressHydrationWarning
+      className={`${manrope.variable} ${nohemi.variable} ${firaCode.variable} ${ethnocentric.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+      </head>
+      <body className="flex min-h-full flex-col">
+        <ThemeProvider>{children}</ThemeProvider>
+      </body>
     </html>
   );
 }

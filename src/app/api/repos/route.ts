@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth/server";
 import { db, type Database } from "@/db/db";
 import { repositories, userRepositories, chunks } from "@/db/schema";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import {
   GitHubApiClient,
   GitHubRepositoryResponse,
@@ -39,7 +39,8 @@ function parseGitHubUrl(url: string): { owner: string; name: string } | null {
 
 /**
  * GET /api/repos
- * Lists all repositories indexed & associated with the authenticated user.
+ * Lists all repositories indexed & associated with the authenticated user, in that user's own
+ * drag-and-drop order (ascending sortOrder on the association, `id` as the stable tiebreak).
  */
 export async function GET(request: Request) {
   try {
@@ -67,7 +68,8 @@ export async function GET(request: Request) {
       })
       .from(repositories)
       .innerJoin(userRepositories, eq(userRepositories.repositoryId, repositories.id))
-      .where(eq(userRepositories.userId, session.user.id));
+      .where(eq(userRepositories.userId, session.user.id))
+      .orderBy(asc(userRepositories.sortOrder), asc(repositories.id));
 
     // Convert BigInt id to string for JSON serialization and include server-provided privacy metadata
     const serialized = list.map((repo) => {
@@ -493,6 +495,14 @@ export async function POST(request: Request) {
         await tx.insert(userRepositories).values({
           userId: session.user.id,
           repositoryId: targetRepoId,
+          // Land at the end of this user's list. The position is derived inside this statement and
+          // inside the transaction that already holds the `repositories` row lock, so a concurrent
+          // add cannot race a separate read-then-write and land on the same position.
+          sortOrder: sql`(
+            select coalesce(max(${userRepositories.sortOrder}), -1) + 1
+            from ${userRepositories}
+            where ${userRepositories.userId} = ${session.user.id}
+          )`,
         });
       }
       return { ...check, repoId: targetRepoId };

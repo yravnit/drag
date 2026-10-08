@@ -60,6 +60,12 @@ vi.mock("@/db/db", () => ({
 vi.mock("drizzle-orm", () => ({
   and: vi.fn(),
   eq: vi.fn(),
+  // The association insert derives its sort_order from a subquery in the same statement.
+  sql: Object.assign(
+    (strings: TemplateStringsArray, ...values: unknown[]) =>
+      strings.reduce((acc, s, i) => acc + s + (i < values.length ? String(values[i]) : ""), ""),
+    { raw: (strings: TemplateStringsArray) => strings.join("?") },
+  ),
 }));
 
 vi.mock("workflow/api", () => ({

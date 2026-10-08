@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { POST } from "../route";
+import { POST, GET } from "../route";
+import { asc } from "drizzle-orm";
 import { embedRepository } from "@/workflows/embed";
 
 const mockGetSession = vi.fn();
@@ -69,6 +70,7 @@ vi.mock("@/db/schema", () => ({
   userRepositories: {
     userId: "userRepositories_userId",
     repositoryId: "userRepositories_repositoryId",
+    sortOrder: "userRepositories_sortOrder",
   },
   chunks: {
     id: "chunks_id",
@@ -79,8 +81,16 @@ vi.mock("@/db/schema", () => ({
 
 vi.mock("drizzle-orm", () => ({
   and: vi.fn(),
+  asc: vi.fn((column: unknown) => ({ asc: column })),
   eq: vi.fn(),
   isNull: vi.fn(),
+  // The association insert derives its sort_order from a subquery in the same statement, so the
+  // mock renders the template instead of returning undefined.
+  sql: Object.assign(
+    (strings: TemplateStringsArray, ...values: unknown[]) =>
+      strings.reduce((acc, s, i) => acc + s + (i < values.length ? String(values[i]) : ""), ""),
+    { raw: (strings: TemplateStringsArray) => strings.join("?") },
+  ),
 }));
 
 let mockExistingRepo: any = null;
@@ -112,6 +122,7 @@ function readStage(
         return stage(stages.all());
       }),
       innerJoin: vi.fn(() => stage(stages.all())),
+      orderBy: vi.fn(() => stage(stages.all())),
     });
   return stage(rows);
 }
@@ -1226,7 +1237,13 @@ describe("POST /api/repos", () => {
     const response = await POST(request);
     expect(response.status).toBe(200);
 
-    expect(associationValues).toEqual({ userId: "user-1", repositoryId: "new-repo-id" });
+    expect(associationValues).toMatchObject({
+      userId: "user-1",
+      repositoryId: "new-repo-id",
+    });
+    // The new association must land at the end of the user's list, not at the default 0.
+    expect(String(associationValues.sortOrder)).toContain("max(userRepositories_sortOrder)");
+    expect(String(associationValues.sortOrder)).toContain("user-1");
     expect(mockWorkflowStart).toHaveBeenCalled();
   });
 
@@ -1293,5 +1310,47 @@ describe("POST /api/repos", () => {
     const data = await response.json();
     expect(data.error).toContain("Repository limit reached for your plan (2/2");
     expect(mockWorkflowStart).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /api/repos", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockExistingRepo = null;
+    mockUserRepos = [];
+    mockUserRecord = null;
+    mockAssociationExists = false;
+    mockPendingChunks = false;
+    mockDbSelect.mockImplementation(createSelectChain);
+  });
+
+  it("returns 401 when unauthenticated", async () => {
+    mockGetSession.mockResolvedValueOnce(null);
+    const response = await GET(new Request("http://localhost/api/repos", { method: "GET" }));
+    expect(response.status).toBe(401);
+  });
+
+  it("orders by the user's own sortOrder ascending, with id as the stable tiebreak", async () => {
+    mockGetSession.mockResolvedValueOnce({ user: { id: "user-1" } } as any);
+    // The join is on user_repositories, so the ordering column lives on the association — a
+    // repositories row is shared between users and cannot carry one user's preference.
+    mockExistingRepo = { id: "repo-1", name: "drag", owner: "yravnit", isPrivate: false };
+
+    const response = await GET(new Request("http://localhost/api/repos", { method: "GET" }));
+
+    expect(response.status).toBe(200);
+    expect(vi.mocked(asc).mock.calls.map(([column]) => column)).toEqual([
+      "userRepositories_sortOrder",
+      "repositories_id",
+    ]);
+  });
+
+  it("serves the rows in the order the database returned them", async () => {
+    mockGetSession.mockResolvedValueOnce({ user: { id: "user-1" } } as any);
+    mockExistingRepo = { id: "repo-1", name: "drag", owner: "yravnit", isPrivate: false };
+
+    const response = await GET(new Request("http://localhost/api/repos", { method: "GET" }));
+
+    expect((await response.json()).map((repo: any) => repo.id)).toEqual(["repo-1"]);
   });
 });

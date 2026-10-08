@@ -1,7 +1,10 @@
 "use client";
 
-import React, { useState } from "react";
-import { FolderGit2, Plus, Menu } from "lucide-react";
+import React, { useCallback, useState } from "react";
+import { FolderGit2, Menu, Plus } from "lucide-react";
+import { Button } from "@/components/ui/Button";
+import { IconButton } from "@/components/ui/IconButton";
+import { cn } from "@/lib/cn";
 import { Sidebar } from "./Sidebar";
 import { ChatWindow } from "./ChatWindow";
 import { AddRepoModal } from "./AddRepoModal";
@@ -16,9 +19,11 @@ import type {
   StatusTracker,
   PlanUsageData,
   ResponseMode,
+  ReorderRepositoriesHandler,
+  ReorderConversationsHandler,
 } from "./types";
 
-interface WorkspaceShellProps {
+export interface WorkspaceShellProps {
   sessionUser: {
     name: string;
     email: string;
@@ -56,12 +61,15 @@ interface WorkspaceShellProps {
   onCreateConversation: () => void | Promise<void>;
   onRenameConversation?: (id: string, newTitle: string) => Promise<void>;
   onDeleteConversation?: (id: string) => Promise<void>;
+  onReorderRepositories?: ReorderRepositoriesHandler;
+  onReorderConversations?: ReorderConversationsHandler;
   onMessageChange: (text: string) => void;
   onSendMessage: (e: React.FormEvent) => void;
   onCitationClick: (citation: Citation) => void;
   onCloseCitation: () => void;
   onSignOut: () => void;
   onSuggestionClick?: (prompt: string) => void;
+  onEditMessage?: (content: string, messageId?: string) => void;
   onRetryMessage?: (message: ChatMessage) => void;
   accessMode?: "public" | "full";
   onUpgradeAccess?: () => void;
@@ -74,6 +82,8 @@ interface WorkspaceShellProps {
   responseMode?: ResponseMode;
   onResponseModeChange?: (mode: ResponseMode) => void;
 }
+
+const DOCKED_DRAWER_COLUMN = "lg:grid-cols-[minmax(0,1fr)_26rem]";
 
 export function WorkspaceShell({
   sessionUser,
@@ -109,12 +119,15 @@ export function WorkspaceShell({
   onCreateConversation,
   onRenameConversation,
   onDeleteConversation,
+  onReorderRepositories,
+  onReorderConversations,
   onMessageChange,
   onSendMessage,
   onCitationClick,
   onCloseCitation,
   onSignOut,
   onSuggestionClick,
+  onEditMessage,
   onRetryMessage,
   accessMode,
   onUpgradeAccess,
@@ -128,15 +141,48 @@ export function WorkspaceShell({
   onResponseModeChange,
 }: WorkspaceShellProps) {
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
-  const closeMobileSidebar = React.useCallback(() => setIsMobileSidebarOpen(false), []);
-  const toggleMobileSidebar = React.useCallback(
+  const closeMobileSidebar = useCallback(() => setIsMobileSidebarOpen(false), []);
+  const toggleMobileSidebar = useCallback(
     () => setIsMobileSidebarOpen((prev) => !prev),
     [],
   );
 
+  const allCitations = React.useMemo(() => {
+    const list: Citation[] = [];
+    const seen = new Set<string>();
+    for (const msg of messages) {
+      if (msg.citations && Array.isArray(msg.citations)) {
+        for (const c of msg.citations) {
+          const key = `${c.filePath}:${c.startLine}-${c.endLine}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            list.push(c);
+          }
+        }
+      }
+    }
+    return list;
+  }, [messages]);
+
+  const handleToggleSources = useCallback(() => {
+    if (selectedCitation) {
+      onCloseCitation();
+    } else if (allCitations.length > 0) {
+      onCitationClick(allCitations[allCitations.length - 1]);
+    } else {
+      onCitationClick({
+        index: 0,
+        filePath: "No sources cited yet",
+        startLine: 0,
+        endLine: 0,
+        symbolName: null,
+        text: "",
+      });
+    }
+  }, [selectedCitation, onCloseCitation, allCitations, onCitationClick]);
+
   return (
-    <div className="flex h-screen w-full overflow-hidden bg-[#0a0a0c] text-zinc-100 font-sans">
-      {/* Sidebar Component */}
+    <div className="flex h-dvh w-full overflow-hidden bg-page text-ink">
       <Sidebar
         sessionUser={sessionUser}
         repositories={repositories}
@@ -157,6 +203,8 @@ export function WorkspaceShell({
         onCreateConversation={onCreateConversation}
         onRenameConversation={onRenameConversation}
         onDeleteConversation={onDeleteConversation}
+        onReorderRepositories={onReorderRepositories}
+        onReorderConversations={onReorderConversations}
         onSignOut={onSignOut}
         accessMode={accessMode}
         onUpgradeAccess={onUpgradeAccess}
@@ -164,69 +212,124 @@ export function WorkspaceShell({
         onOpenPlanModal={onOpenPlanModal}
       />
 
-      {/* Main Content Area */}
-      <main className="flex-1 flex flex-col bg-[#050507] overflow-hidden relative">
-        {!selectedRepo ? (
-          /* Empty state: No repository selected */
-          <div className="flex-1 flex flex-col">
-            {/* Mobile Header Bar */}
-            <div className="md:hidden px-4 py-3 border-b border-zinc-900 bg-[#0d0d10]/40 flex items-center gap-3">
-              <button
-                onClick={() => setIsMobileSidebarOpen(true)}
-                className="p-1.5 hover:bg-zinc-800 active:scale-90 rounded-lg text-zinc-400 hover:text-white transition cursor-pointer"
-                title="Open menu"
-                aria-label="Open menu"
-              >
-                <Menu className="h-5 w-5" />
-              </button>
-              <span className="text-xs font-bold text-white">DRAG Workspace</span>
-            </div>
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="flex h-14 shrink-0 items-center gap-2 border-b border-header-line bg-header px-3 backdrop-blur-md sm:px-5">
+          <IconButton
+            onClick={toggleMobileSidebar}
+            aria-label="Open sidebar"
+            title="Open sidebar"
+            className="md:hidden"
+          >
+            <Menu className="size-4" aria-hidden />
+          </IconButton>
 
-            <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
-              <div className="h-16 w-16 rounded-2xl bg-zinc-900 border border-zinc-800 flex items-center justify-center mb-6 shadow">
-                <FolderGit2 className="h-8 w-8 text-zinc-500" />
-              </div>
-              <h2 className="text-xl font-bold text-white">Select a Repository</h2>
-              <p className="mt-2 text-sm text-zinc-400 max-w-sm leading-relaxed">
-                Choose a repository from the sidebar or index a new one to start chatting with your codebase.
-              </p>
-              <button
-                onClick={onOpenAddModal}
-                className="mt-6 inline-flex items-center gap-2 rounded-xl bg-teal-500 hover:bg-teal-400 active:scale-95 px-4 py-2.5 text-xs font-bold text-zinc-950 transition shadow cursor-pointer"
+          <span className="shrink-0 font-brand text-[17px] leading-none text-ink">DRAG</span>
+
+          {selectedConversation && (
+            <div className="hidden min-w-0 items-center gap-1.5 sm:flex">
+              <span className="text-sm text-ink-4" aria-hidden>
+                /
+              </span>
+              <span
+                title={selectedConversation.title}
+                className="truncate text-[13px] font-medium text-ink-3"
               >
-                <Plus className="h-4 w-4" /> Index New Repository
-              </button>
+                {selectedConversation.title}
+              </span>
             </div>
+          )}
+
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={handleToggleSources}
+              aria-pressed={selectedCitation !== null}
+              title={
+                selectedCitation
+                  ? "Hide source citations"
+                  : "View source citations"
+              }
+              className={cn(
+                "inline-flex h-[34px] items-center gap-1.5 rounded-[8px] border px-3 text-[12.5px] font-semibold transition-colors duration-150 active:scale-[0.96]",
+                selectedCitation !== null
+                  ? "border-accent bg-accent-soft text-accent-ink"
+                  : "border-line bg-surface-2 text-ink-2 hover:border-line-2 hover:bg-surface-3 hover:text-ink",
+              )}
+            >
+              <span>{selectedCitation ? "Hide Sources" : "Sources"}</span>
+              {allCitations.length > 0 && (
+                <span className="rounded-full bg-surface-3 px-1.5 py-0.5 font-mono text-[10px] text-ink-3">
+                  {allCitations.length}
+                </span>
+              )}
+            </button>
           </div>
-        ) : (
-          /* Active Selected Repository View */
-          <ChatWindow
-            selectedRepo={selectedRepo}
-            selectedConversation={selectedConversation}
-            statusTracker={statusTracker}
-            messages={messages}
-            messagesLoading={messagesLoading}
-            messagesError={messagesError}
-            messageText={messageText}
-            isStreaming={isStreaming}
-            chatError={chatError}
-            onMessageChange={onMessageChange}
-            onSendMessage={onSendMessage}
-            onCitationClick={onCitationClick}
-            onCreateConversation={onCreateConversation}
-            onRetryRepo={onRetryRepo}
-            onToggleMobileSidebar={toggleMobileSidebar}
-            onSuggestionClick={onSuggestionClick}
-            onRetryMessage={onRetryMessage}
-            selectedModel={selectedModel}
-            onSelectModel={onSelectModel}
-            responseMode={responseMode}
-            onResponseModeChange={onResponseModeChange}
-          />
-        )}
-      </main>
+        </header>
 
-      {/* Modal: Add Repository with Entitlement Policy and Privacy Disclosures */}
+        <div
+          className={cn(
+            "grid min-h-0 flex-1 auto-rows-fr grid-cols-1",
+            selectedCitation && DOCKED_DRAWER_COLUMN,
+          )}
+        >
+          <main className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-chat">
+            {!selectedRepo ? (
+              <div className="flex flex-1 flex-col items-center justify-center gap-6 p-8 text-center">
+                <div className="flex size-16 items-center justify-center rounded-card border border-line bg-surface text-accent shadow-card">
+                  <FolderGit2 className="size-8" aria-hidden />
+                </div>
+                <div className="max-w-sm">
+                  <h2 className="text-2xl font-display tracking-display text-ink">
+                    Select a Repository
+                  </h2>
+                  <p className="mt-2 text-sm leading-relaxed text-ink-3">
+                    Choose a repository from the sidebar or index a new one to start
+                    chatting with your codebase.
+                  </p>
+                </div>
+                <Button onClick={onOpenAddModal}>
+                  <Plus className="size-4" aria-hidden />
+                  Index New Repository
+                </Button>
+              </div>
+            ) : (
+              <ChatWindow
+                selectedRepo={selectedRepo}
+                selectedConversation={selectedConversation}
+                statusTracker={statusTracker}
+                messages={messages}
+                messagesLoading={messagesLoading}
+                messagesError={messagesError}
+                messageText={messageText}
+                isStreaming={isStreaming}
+                chatError={chatError}
+                onMessageChange={onMessageChange}
+                onSendMessage={onSendMessage}
+                onCitationClick={onCitationClick}
+                onCreateConversation={onCreateConversation}
+                onRetryRepo={onRetryRepo}
+                onToggleMobileSidebar={toggleMobileSidebar}
+                onSuggestionClick={onSuggestionClick}
+                onEditMessage={onEditMessage}
+                onRetryMessage={onRetryMessage}
+                selectedModel={selectedModel}
+                onSelectModel={onSelectModel}
+                responseMode={responseMode}
+                onResponseModeChange={onResponseModeChange}
+              />
+            )}
+          </main>
+
+          <CitationDrawer
+            citation={selectedCitation}
+            repository={selectedRepo}
+            onClose={onCloseCitation}
+            allCitations={allCitations}
+            onSelectCitation={onCitationClick}
+          />
+        </div>
+      </div>
+
       <AddRepoModal
         isOpen={isAddingRepo}
         onClose={onCloseAddModal}
@@ -241,18 +344,10 @@ export function WorkspaceShell({
         entitlements={planUsage?.entitlements}
       />
 
-      {/* Modal: Plans and Usage Details */}
       <PlanUsageModal
         isOpen={isPlanModalOpen}
         onClose={onClosePlanModal || (() => {})}
         planUsage={planUsage ?? null}
-      />
-
-      {/* Drawer: Citation Detail */}
-      <CitationDrawer
-        citation={selectedCitation}
-        repository={selectedRepo}
-        onClose={onCloseCitation}
       />
     </div>
   );

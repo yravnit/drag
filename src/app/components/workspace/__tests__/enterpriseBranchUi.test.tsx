@@ -5,6 +5,10 @@ import { AddRepoModal } from "../AddRepoModal";
 import { PlanUsageModal } from "../PlanUsageModal";
 import type { PlanUsageData } from "../types";
 
+/** The branch input's own opening tag, so plan gating is asserted on the field and not the document. */
+const branchInput = (html: string) =>
+  /<input[^>]*id="repo-branch-input"[^>]*>/.exec(html)?.[0] ?? "";
+
 describe("Branch Selection UI and BOSS Plan", () => {
   const freeEntitlements: PlanUsageData["entitlements"] = {
     plan: "free",
@@ -84,7 +88,9 @@ describe("Branch Selection UI and BOSS Plan", () => {
 
       expect(html).toContain("repo-branch-input");
       expect(html).toContain("main branch only on Free plan");
-      expect(html).toContain("disabled=\"\"");
+      // Scoped to the branch input: `disabled=""` also appears on the Add button (an empty
+      // URL disables it on every plan), so a document-wide check proved nothing.
+      expect(branchInput(html)).toContain('disabled=""');
     });
 
     it("enables branch input for Hobby plan users", () => {
@@ -105,6 +111,7 @@ describe("Branch Selection UI and BOSS Plan", () => {
       expect(html).toContain("repo-branch-input");
       expect(html).toContain("Any branch");
       expect(html).not.toContain("main branch only on Free plan");
+      expect(branchInput(html)).not.toContain("disabled");
     });
 
     it("renders branch input for Enterprise users with safe default main", () => {
@@ -123,7 +130,7 @@ describe("Branch Selection UI and BOSS Plan", () => {
       );
 
       expect(html).toContain("repo-branch-input");
-      expect(html).toContain("placeholder=\"main\"");
+      expect(html).toContain('placeholder="main"');
     });
 
     it("renders branch input for Enterprise users with configured entitlement branch", () => {
@@ -205,11 +212,7 @@ describe("Branch Selection UI and BOSS Plan", () => {
       };
 
       const html = renderToStaticMarkup(
-        <PlanUsageModal
-          isOpen={true}
-          onClose={vi.fn()}
-          planUsage={bossPlanUsage}
-        />,
+        <PlanUsageModal isOpen={true} onClose={vi.fn()} planUsage={bossPlanUsage} />,
       );
 
       expect(html).toContain("BOSS Mode Active");

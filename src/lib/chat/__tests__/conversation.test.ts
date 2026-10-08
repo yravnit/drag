@@ -461,5 +461,86 @@ describe("answerConversation", () => {
       },
     );
   });
+
+  it("does not count reasoning toward cutoff and saves title with reasoning stripped", async () => {
+    let titleMessages: ChatMessage[] | null = null;
+    const setup = baseSetup(
+      [
+        Promise.resolve([{ id: "conv-1", userId: "user-1", repositoryId: "repo-1", title: "New Chat Thread" }]),
+        Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name" }]),
+        freshAccessRow(true),
+        Promise.resolve([]),
+      ],
+      {
+        streamLLM: async (messages) => {
+          if (messages[0].content.includes("You name chat threads")) {
+            titleMessages = messages;
+            return (async function* () {
+              yield "<think>\n";
+              // Stream over 600 characters of reasoning
+              yield "Let's think carefully about this thread title. ".repeat(20);
+              yield "\n</think>\n";
+              yield '{"title":"Alpha function logic"}';
+            })();
+          }
+          return (async function* () {
+            yield "answer text";
+          })();
+        },
+      },
+    );
+
+    const result = await answerConversation(setup.deps, setup.input);
+    expect(result.ok).toBe(true);
+    await consumeStream((result as any).stream);
+
+    expect(titleMessages).not.toBeNull();
+    const titleUpdate = setup.updates.find((u) => u.set.title !== undefined);
+    expect(titleUpdate).toBeDefined();
+    expect(titleUpdate?.set.title).toBe("Alpha function logic");
+  });
+
+  it("includes expectedTitle in conversation title update where clause", async () => {
+    const setup = baseSetup(
+      [
+        Promise.resolve([{ id: "conv-1", userId: "user-1", repositoryId: "repo-1", title: "Untouched Name" }]),
+        Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name" }]),
+        freshAccessRow(true),
+        Promise.resolve([]),
+      ],
+      {
+        streamLLM: async (messages) => {
+          if (messages[0].content.includes("You name chat threads")) {
+            return (async function* () {
+              yield '{"title":"Generated Title"}';
+            })();
+          }
+          return (async function* () {
+            yield "answer";
+          })();
+        },
+      },
+    );
+
+    const result = await answerConversation(setup.deps, setup.input);
+    expect(result.ok).toBe(true);
+    await consumeStream((result as any).stream);
+
+    const titleUpdate = setup.updates.find((u) => u.set.title !== undefined);
+    expect(titleUpdate).toBeDefined();
+    expect(titleUpdate?.set.title).toBe("Generated Title");
+
+    const values: any[] = [];
+    function walk(node: any) {
+      if (!node) return;
+      if (node.value !== undefined) values.push(node.value);
+      if (Array.isArray(node.queryChunks)) {
+        for (const child of node.queryChunks) walk(child);
+      }
+    }
+    walk(titleUpdate?.where);
+
+    expect(values).toContain("Untouched Name");
+  });
 });
 

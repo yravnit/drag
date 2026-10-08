@@ -105,7 +105,7 @@ describe("Phase 2 UI Components", () => {
   });
 
   describe("2. Repository Privacy Indicator (RepoList)", () => {
-    it("renders server-provided privacy indicator for public repositories", () => {
+    it("omits privacy indicator badge in repository list for public repositories", () => {
       const repos: WorkspaceRepository[] = [
         {
           id: "repo-pub",
@@ -136,11 +136,11 @@ describe("Phase 2 UI Components", () => {
         />,
       );
 
-      expect(html).toContain("Public repo");
+      expect(html).not.toContain("Public repo");
       expect(html).not.toContain("Gemini embeddings");
     });
 
-    it("renders server-provided privacy indicator for private repositories", () => {
+    it("omits privacy indicator badge in repository list for private repositories", () => {
       const repos: WorkspaceRepository[] = [
         {
           id: "repo-priv",
@@ -171,7 +171,7 @@ describe("Phase 2 UI Components", () => {
         />,
       );
 
-      expect(html).toContain("Private repo");
+      expect(html).not.toContain("Private repo");
       expect(html).not.toContain("Protected embeddings");
     });
   });
