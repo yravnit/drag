@@ -1,7 +1,7 @@
-import { db } from "@/db/db";
-import { chunks } from "@/db/schema";
+import { db, Database } from "@/db/db";
+import { chunks, repositories } from "@/db/schema";
 import { eq, isNull, and } from "drizzle-orm";
-import { NimEmbeddingProvider } from "@/lib/embeddings/embeddingProvider";
+import { getEmbeddingProviderForRepository } from "@/lib/embeddings/router";
 
 export interface EmbedPayload {
   repositoryId: string;
@@ -27,14 +27,15 @@ const MAX_BATCHES_PER_RUN = 100;
  */
 const MAX_CHUNK_CHARS = 8192;
 
-async function runEmbedBatchStep(repositoryId: string): Promise<{
+export async function runEmbedBatch(
+  database: Database,
+  repositoryId: string,
+): Promise<{
   embeddedCount: number;
   hasMore: boolean;
 }> {
-  "use step";
-
   // Fetch chunks without embeddings
-  const batchChunks = await db
+  const batchChunks = await database
     .select({
       id: chunks.id,
       text: chunks.text,
@@ -50,13 +51,30 @@ async function runEmbedBatchStep(repositoryId: string): Promise<{
     };
   }
 
+  // Resolve repository visibility and embedding provider provenance
+  const [repo] = await database
+    .select({
+      isPrivate: repositories.isPrivate,
+      embeddingProvider: repositories.embeddingProvider,
+      embeddingModel: repositories.embeddingModel,
+      embeddingDimensions: repositories.embeddingDimensions,
+    })
+    .from(repositories)
+    .where(eq(repositories.id, repositoryId))
+    .limit(1);
+
+  const provider = getEmbeddingProviderForRepository({
+    isPrivate: Boolean(repo?.isPrivate),
+    embeddingProvider: repo?.embeddingProvider,
+    embeddingModel: repo?.embeddingModel,
+    embeddingDimensions: repo?.embeddingDimensions,
+  });
+
   // Truncate oversized chunk texts to prevent repeatedly blocking on the same chunk.
-  // NVIDIA NIM also supports server-side truncation via the "END" truncate parameter.
   const texts = batchChunks.map((c) =>
     c.text.length > MAX_CHUNK_CHARS ? c.text.slice(0, MAX_CHUNK_CHARS) : c.text,
   );
 
-  const provider = new NimEmbeddingProvider();
   const result = await provider.generateEmbeddings({
     input: texts,
     truncate: "END",
@@ -71,23 +89,68 @@ async function runEmbedBatchStep(repositoryId: string): Promise<{
 
   // Persist embeddings sequentially within a single transaction.
   // Promise.all over tx.update is avoided to prevent connection pool contention.
-  await db.transaction(async (tx) => {
+  await database.transaction(async (tx) => {
     const now = new Date();
     for (let i = 0; i < batchChunks.length; i++) {
       await tx
         .update(chunks)
         .set({
           embedding: embeddings[i],
+          embeddingProvider: provider.name,
+          embeddingModel: provider.model,
           updatedAt: now,
         })
         .where(eq(chunks.id, batchChunks[i].id));
     }
+
+    // Persist provider and model provenance on repository record
+    await tx
+      .update(repositories)
+      .set({
+        embeddingProvider: provider.name,
+        embeddingModel: provider.model,
+        embeddingDimensions: provider.dimensions,
+        updatedAt: now,
+      })
+      .where(eq(repositories.id, repositoryId));
   });
 
   return {
     embeddedCount: batchChunks.length,
     hasMore: batchChunks.length === EMBED_BATCH_SIZE,
   };
+}
+
+async function runEmbedBatchStep(repositoryId: string) {
+  "use step";
+  return runEmbedBatch(db, repositoryId);
+}
+
+import {
+  claimEmbeddingLease,
+  renewEmbeddingLease,
+  finalizeEmbedding,
+  clearEmbeddingLease,
+} from "@/lib/leases/repositoryLeases";
+
+async function claimEmbeddingLeaseStep(repositoryId: string) {
+  "use step";
+  return claimEmbeddingLease(db, repositoryId);
+}
+
+async function renewEmbeddingLeaseStep(repositoryId: string, claimId: string) {
+  "use step";
+  return renewEmbeddingLease(db, repositoryId, claimId);
+}
+
+async function clearEmbeddingLeaseStep(repositoryId: string, claimId: string) {
+  "use step";
+  return clearEmbeddingLease(db, repositoryId, claimId);
+}
+
+async function finalizeEmbeddingStep(repositoryId: string, status: "ready" | "failed", claimId: string) {
+  "use step";
+  return finalizeEmbedding(db, repositoryId, status, claimId);
 }
 
 export async function embedRepository(payload: EmbedPayload): Promise<EmbedResult> {
@@ -97,19 +160,51 @@ export async function embedRepository(payload: EmbedPayload): Promise<EmbedResul
     throw new Error('Missing required field: "repositoryId"');
   }
 
+  const claim = await claimEmbeddingLeaseStep(payload.repositoryId);
+  if (!claim.claimed) {
+    return {
+      success: true,
+      totalEmbedded: 0,
+    };
+  }
+
+  const claimId = claim.claimId;
   let totalEmbedded = 0;
   let hasMore = true;
   let batchCount = 0;
 
-  while (hasMore && batchCount < MAX_BATCHES_PER_RUN) {
-    const stepResult = await runEmbedBatchStep(payload.repositoryId);
-    totalEmbedded += stepResult.embeddedCount;
-    hasMore = stepResult.hasMore;
-    batchCount++;
-  }
+  try {
+    while (hasMore && batchCount < MAX_BATCHES_PER_RUN) {
+      // Renew before each batch. Provider pacing alone can run longer than the lease, and an
+      // expired lease lets another worker claim the run; renew first so that never happens.
+      const stillOwned = await renewEmbeddingLeaseStep(payload.repositoryId, claimId);
+      if (!stillOwned) {
+        // The lease was taken over. Stop writing; whoever holds the claim now owns this state.
+        return {
+          success: true,
+          totalEmbedded,
+        };
+      }
 
-  return {
-    success: true,
-    totalEmbedded,
-  };
+      const stepResult = await runEmbedBatchStep(payload.repositoryId);
+      totalEmbedded += stepResult.embeddedCount;
+      hasMore = stepResult.hasMore;
+      batchCount++;
+    }
+
+    if (hasMore) {
+      // More chunks remain: release lease so next cron cycle continues, do NOT mark ready
+      await clearEmbeddingLeaseStep(payload.repositoryId, claimId);
+    } else {
+      await finalizeEmbeddingStep(payload.repositoryId, "ready", claimId);
+    }
+
+    return {
+      success: true,
+      totalEmbedded,
+    };
+  } catch (error) {
+    await finalizeEmbeddingStep(payload.repositoryId, "failed", claimId);
+    throw error;
+  }
 }

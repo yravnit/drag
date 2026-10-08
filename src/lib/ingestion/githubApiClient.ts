@@ -9,12 +9,14 @@ export interface GitHubApiClientOptions {
 }
 
 export interface GitHubRepositoryResponse {
+  id: number;
   name: string;
   owner: { login: string };
   html_url: string;
   default_branch: string;
   description: string | null;
   language: string | null;
+  private?: boolean;
 }
 
 export interface GitHubCommitResponse {
@@ -24,7 +26,7 @@ export interface GitHubCommitResponse {
   };
 }
 
-export interface GitHubCompareFile {
+interface GitHubCompareFile {
   filename: string;
   status: "added" | "modified" | "removed" | "renamed" | "copied" | "changed" | string;
   previous_filename?: string;
@@ -36,6 +38,22 @@ export interface GitHubCompareResponse {
   behind_by: number;
   total_commits: number;
   files?: GitHubCompareFile[];
+}
+
+interface GitHubTreeEntry {
+  path: string;
+  mode: string;
+  type: "blob" | "tree" | "commit";
+  sha: string;
+  size?: number;
+  url: string;
+}
+
+export interface GitHubTreeResponse {
+  sha: string;
+  url: string;
+  tree: GitHubTreeEntry[];
+  truncated: boolean;
 }
 
 /**
@@ -114,8 +132,15 @@ export class GitHubApiClient {
         let delay: number;
         if (retryAfter) {
           const parsed = parseInt(retryAfter, 10);
-          // Honor the server-provided Retry-After without capping — the server knows best.
-          delay = !isNaN(parsed) ? parsed * 1000 : this.baseDelayMs * Math.pow(2, attempt - 1);
+          const requestedDelay = !isNaN(parsed) ? parsed * 1000 : this.baseDelayMs * Math.pow(2, attempt - 1);
+          // Bound Retry-After to maxDelayMs. In serverless, waiting minutes/hours triggers function timeouts.
+          if (requestedDelay > this.maxDelayMs) {
+            console.warn(
+              `[GitHubApiClient Warning] Status ${response.status} for ${url} requested Retry-After ${requestedDelay}ms, which exceeds maxDelayMs (${this.maxDelayMs}ms). Returning immediately to prevent unbounded serverless delay.`,
+            );
+            return response;
+          }
+          delay = requestedDelay;
         } else {
           // Exponential backoff with random jitter, capped at maxDelayMs
           delay = Math.min(
@@ -217,5 +242,22 @@ export class GitHubApiClient {
       throw new Error(`Failed to download tarball from ${url}: Status ${res.status}`);
     }
     return res;
+  }
+
+  /**
+   * Fetches repository tree (optionally recursive).
+   */
+  public async getTree(
+    owner: string,
+    repo: string,
+    treeSha: string,
+    recursive = false,
+  ): Promise<GitHubTreeResponse> {
+    const url = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${encodeURIComponent(treeSha)}${recursive ? "?recursive=1" : ""}`;
+    const res = await this.fetchWithRetry(url);
+    if (!res.ok) {
+      throw new Error(`Failed to fetch tree from ${url}: Status ${res.status}`);
+    }
+    return (await res.json()) as GitHubTreeResponse;
   }
 }

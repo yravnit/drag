@@ -32,3 +32,11 @@ export function isCronAuthorized(request: Request): boolean {
     return false;
   }
 }
+
+/**
+ * Single authorization gate for cron routes: skips the secret check outside
+ * production, otherwise requires a valid Vercel Cron Authorization header.
+ */
+export function ensureCronAuthorized(request: Request): boolean {
+  return process.env.NODE_ENV !== "production" || isCronAuthorized(request);
+}

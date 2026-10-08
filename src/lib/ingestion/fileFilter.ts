@@ -2,7 +2,7 @@ import fs from "fs";
 import path from "path";
 import ignore, { Ignore } from "ignore";
 
-export type SupportedSourceLanguage =
+type SupportedSourceLanguage =
   | "typescript"
   | "tsx"
   | "javascript"
@@ -17,7 +17,7 @@ export type SupportedSourceLanguage =
   | "c"
   | "php";
 
-export type ProjectDocumentLanguage =
+type ProjectDocumentLanguage =
   | "markdown"
   | "json"
   | "yaml"
@@ -139,6 +139,26 @@ const IGNORED_EXTENSIONS = new Set([
   ".ttf",
   ".eot",
   ".otf",
+  // Certificates & Keys
+  ".pem",
+  ".key",
+  ".p12",
+  ".pfx",
+  ".crt",
+  ".cer",
+  ".der",
+  ".kdbx",
+]);
+
+const SENSITIVE_EXTENSIONS = new Set([
+  ".pem",
+  ".key",
+  ".p12",
+  ".pfx",
+  ".crt",
+  ".cer",
+  ".der",
+  ".kdbx",
 ]);
 
 const LOCKFILES = new Set([
@@ -157,9 +177,77 @@ const LOCKFILES = new Set([
 const EXCLUDED_FILENAMES = new Set(["AGENTS.md"]);
 
 /**
+ * Checks whether file content contains private keys or sensitive credentials.
+ */
+export function isSensitiveContent(content: string): boolean {
+  if (!content || typeof content !== "string") {
+    return false;
+  }
+
+  const privateKeyPattern = /-----BEGIN(?: [A-Z0-9_-]+)? PRIVATE KEY-----/i;
+  const pgpPrivateKeyPattern = /-----BEGIN PGP PRIVATE KEY BLOCK-----/i;
+  const certPattern = /-----BEGIN CERTIFICATE-----/i;
+
+  return (
+    privateKeyPattern.test(content) ||
+    pgpPrivateKeyPattern.test(content) ||
+    certPattern.test(content)
+  );
+}
+
+/**
+ * Checks whether a file path or its content represents a sensitive secret file.
+ */
+export function isSensitiveFile(relativePath: string, content?: string): boolean {
+  const normPath = relativePath.replace(/\\/g, "/");
+  const filename = path.basename(normPath).toLowerCase();
+  const ext = path.extname(normPath).toLowerCase();
+
+  if (SENSITIVE_EXTENSIONS.has(ext)) {
+    return true;
+  }
+
+  if (filename === ".env" || filename.startsWith(".env.")) {
+    return true;
+  }
+
+  if (
+    filename === "id_rsa" ||
+    filename === "id_rsa.pub" ||
+    filename === "id_ed25519" ||
+    filename === "id_ed25519.pub" ||
+    filename === "id_dsa" ||
+    filename === "id_ecdsa"
+  ) {
+    return true;
+  }
+
+  if (
+    filename === "credentials.json" ||
+    filename === "auth.json" ||
+    filename === "token.json" ||
+    /^client_secret.*\.json$/i.test(filename) ||
+    /^service[-_]account.*\.json$/i.test(filename) ||
+    /^service[-_]account.*\.(yaml|yml)$/i.test(filename)
+  ) {
+    return true;
+  }
+
+  if (content && isSensitiveContent(content)) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Returns the language tag for a file path, or null if the file should be skipped.
  */
 export function getLanguageForFile(relativePath: string): DiscoveredFile["language"] | null {
+  if (isSensitiveFile(relativePath)) {
+    return null;
+  }
+
   const normPath = relativePath.replace(/\\/g, "/");
   const filename = path.basename(normPath);
   const ext = path.extname(normPath).toLowerCase();
@@ -214,7 +302,7 @@ export function getLanguageForFile(relativePath: string): DiscoveredFile["langua
 /**
  * Returns true for project/config files (non-source language tag).
  */
-export function isProjectFile(language: DiscoveredFile["language"]): boolean {
+function isProjectFile(language: DiscoveredFile["language"]): boolean {
   return !SOURCE_LANGUAGES.has(language);
 }
 
@@ -246,7 +334,20 @@ export async function discoverRepositoryFiles(
   }
 
   async function traverse(currentDir: string, relativeDir: string) {
-    const entries = await fs.promises.readdir(currentDir, { withFileTypes: true });
+    // An unreadable directory (permissions, broken symlink, race with a checkout) must skip
+    // that subtree rather than reject: discoverRepositoryFiles has no per-directory recovery,
+    // so one throw here aborts the entire ingestion run at the caller's await.
+    let entries: fs.Dirent[];
+    try {
+      entries = await fs.promises.readdir(currentDir, { withFileTypes: true });
+    } catch (err) {
+      console.warn(
+        `[fileFilter] Skipping unreadable directory '${relativeDir || "."}': ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return;
+    }
 
     // Deterministic sorting (alphabetical)
     entries.sort((a, b) => a.name.localeCompare(b.name));
@@ -278,7 +379,8 @@ export async function discoverRepositoryFiles(
           LOCKFILES.has(entry.name) ||
           LOCKFILES.has(filename) ||
           EXCLUDED_FILENAMES.has(entry.name) ||
-          IGNORED_EXTENSIONS.has(ext)
+          IGNORED_EXTENSIONS.has(ext) ||
+          isSensitiveFile(relPath)
         ) {
           continue;
         }

@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, boolean, index } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, boolean, integer, bigint, index } from "drizzle-orm/pg-core";
 
 export const user = pgTable("user", {
   id: text("id").primaryKey(),
@@ -6,6 +6,13 @@ export const user = pgTable("user", {
   email: text("email").notNull().unique(),
   emailVerified: boolean("email_verified").default(false).notNull(),
   image: text("image"),
+  plan: text("plan").default("free").notNull(),
+  customRepositoryLimit: integer("custom_repository_limit"),
+  customMonthlyQueryLimit: integer("custom_monthly_query_limit"),
+  customRepositorySizeBytes: bigint("custom_repository_size_bytes", { mode: "number" }),
+  customFileLimit: integer("custom_file_limit"),
+  customAllowedBranch: text("custom_allowed_branch"),
+  customIncrementalReindexAllowed: boolean("custom_incremental_reindex_allowed"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at")
     .defaultNow()
@@ -47,6 +54,7 @@ export const account = pgTable(
     accessTokenExpiresAt: timestamp("access_token_expires_at"),
     refreshTokenExpiresAt: timestamp("refresh_token_expires_at"),
     scope: text("scope"),
+    grantedScope: text("granted_scope"),
     password: text("password"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
