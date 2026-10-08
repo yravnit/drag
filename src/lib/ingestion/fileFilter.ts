@@ -184,9 +184,10 @@ export function isSensitiveContent(content: string): boolean {
     return false;
   }
 
-  const privateKeyPattern = /-----BEGIN(?: [A-Z0-9_-]+)? PRIVATE KEY-----/i;
-  const pgpPrivateKeyPattern = /-----BEGIN PGP PRIVATE KEY BLOCK-----/i;
-  const certPattern = /-----BEGIN CERTIFICATE-----/i;
+  const privateKeyPattern =
+    /(?:^|\r?\n)\s*-----BEGIN(?: [A-Z0-9_-]+)? PRIVATE KEY-----\s*(?:\r?\n|$)/i;
+  const pgpPrivateKeyPattern = /(?:^|\r?\n)\s*-----BEGIN PGP PRIVATE KEY BLOCK-----\s*(?:\r?\n|$)/i;
+  const certPattern = /(?:^|\r?\n)\s*-----BEGIN CERTIFICATE-----\s*(?:\r?\n|$)/i;
 
   return (
     privateKeyPattern.test(content) ||

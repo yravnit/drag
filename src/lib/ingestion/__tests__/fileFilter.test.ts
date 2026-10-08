@@ -200,5 +200,12 @@ MIIDXTCCAkWgAwIBAgIJ...
 
     expect(isSensitiveFile("src/key.txt", rsaKey)).toBe(true);
     expect(isSensitiveFile("src/code.ts", regularCode)).toBe(false);
+
+    // Documentation and code regexes should not trigger false positives
+    const documentationProse =
+      "Skipping files matching (-----BEGIN ... PRIVATE KEY----- or -----BEGIN CERTIFICATE-----)";
+    const regexDeclaration = "const certPattern = /-----BEGIN CERTIFICATE-----/i;";
+    expect(isSensitiveContent(documentationProse)).toBe(false);
+    expect(isSensitiveContent(regexDeclaration)).toBe(false);
   });
 });

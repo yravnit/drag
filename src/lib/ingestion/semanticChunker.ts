@@ -90,14 +90,22 @@ export class SemanticChunker {
         ];
       }
 
-      const lines = content.split("\n");
+      try {
+        const lines = content.split("\n");
 
-      if (lang === "python") {
-        return this.chunkPythonAST(tree.rootNode, lines, file.language);
-      } else if (["typescript", "tsx", "javascript", "jsx"].includes(lang)) {
-        return this.chunkJsTsAST(tree.rootNode, lines, file.language);
-      } else {
-        return this.chunkGenericAST(tree.rootNode, lines, file.language);
+        if (lang === "python") {
+          return this.chunkPythonAST(tree.rootNode, lines, file.language);
+        } else if (["typescript", "tsx", "javascript", "jsx"].includes(lang)) {
+          return this.chunkJsTsAST(tree.rootNode, lines, file.language);
+        } else {
+          return this.chunkGenericAST(tree.rootNode, lines, file.language);
+        }
+      } finally {
+        try {
+          tree.delete();
+        } catch {
+          // Ignore tree disposal errors
+        }
       }
     });
   }
