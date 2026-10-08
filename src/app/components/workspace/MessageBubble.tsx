@@ -65,9 +65,9 @@ export function MessageBubble({
       return (
         <div className="flex flex-col items-end">
           <div className="min-w-[180px] max-w-[75%] rounded-[14px_14px_2px_14px] border border-bubble-line bg-bubble p-2.5 text-bubble-ink shadow-card">
-            <div className="grid">
+            <div className="grid max-h-[220px]">
               <span
-                className="invisible col-start-1 row-start-1 whitespace-pre-wrap break-words p-2 text-sm leading-relaxed border border-transparent select-none pointer-events-none"
+                className="invisible col-start-1 row-start-1 whitespace-pre-wrap break-words p-2 text-sm leading-relaxed border border-transparent select-none pointer-events-none max-h-[220px] overflow-hidden"
                 aria-hidden
               >
                 {draftContent || " "}

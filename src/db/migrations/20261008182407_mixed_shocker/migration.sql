@@ -1,0 +1,1 @@
+ALTER TABLE "messages" ADD COLUMN "attempt_id" text;

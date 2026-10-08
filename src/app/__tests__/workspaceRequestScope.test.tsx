@@ -17,6 +17,7 @@ interface ShellProps {
   onSelectConversation: (conv: unknown) => void;
   onMessageChange: (text: string) => void;
   onSendMessage: (event: unknown) => Promise<void>;
+  onEditMessage?: (content: string, messageId?: string) => void;
 }
 
 /** Props the workspace shell last received, so tests can drive selection directly. */
@@ -281,5 +282,77 @@ describe("workspace request scoping", () => {
     // Old repo 1 conversations should not have been re-fetched or replaced repo 2's list
     expect(repo1FetchCount).toBe(1);
     expect(shellProps.conversations).toEqual(repo2Convs);
+  });
+
+  it("does not roll back a newer successful edit when an earlier overlapping edit fails", async () => {
+    stubCommonRoutes();
+    const repo1Convs = [{ id: "convo-1", title: "Thread one", repositoryId: "repo-1" }];
+    const initialMessages = [
+      { id: "msg-1", role: "user", content: "Original prompt", status: "completed" },
+    ];
+    routes["/api/conversations"] = async () => repo1Convs;
+    routes["/api/conversations/convo-1/messages"] = async () => initialMessages;
+
+    const patch1 = deferred<{ ok: boolean; status: number }>();
+    const patch2 = deferred<{ ok: boolean; status: number }>();
+    let patchCount = 0;
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: unknown, init?: RequestInit) => {
+        const fullUrl = String(url);
+        const path = fullUrl.split("?")[0];
+        if (init?.method === "PATCH") {
+          patchCount++;
+          if (patchCount === 1) {
+            const res = await patch1.promise;
+            return { ok: res.ok, status: res.status, json: async () => ({}) } as unknown as Response;
+          }
+          if (patchCount === 2) {
+            const res = await patch2.promise;
+            return { ok: res.ok, status: res.status, json: async () => ({}) } as unknown as Response;
+          }
+        }
+        const route = routes[path];
+        if (!route) throw new Error(`unrouted fetch: ${url}`);
+        return { ok: true, json: async () => route() } as unknown as Response;
+      }),
+    );
+
+    await mount();
+    await act(async () => {
+      shellProps.onSelectRepo(REPO_ONE);
+    });
+    await act(async () => {
+      shellProps.onSelectConversation(repo1Convs[0]);
+    });
+
+    expect(shellProps.messages[0].content).toBe("Original prompt");
+
+    // First edit: "Prompt edit 1" (held open in patch1)
+    await act(async () => {
+      void shellProps.onEditMessage?.("Prompt edit 1", "msg-1");
+    });
+    expect(shellProps.messages[0].content).toBe("Prompt edit 1");
+
+    // Second edit while first is pending: "Prompt edit 2" (held open in patch2)
+    await act(async () => {
+      void shellProps.onEditMessage?.("Prompt edit 2", "msg-1");
+    });
+    expect(shellProps.messages[0].content).toBe("Prompt edit 2");
+
+    // Second edit succeeds
+    await act(async () => {
+      patch2.resolve({ ok: true, status: 200 });
+    });
+    expect(shellProps.messages[0].content).toBe("Prompt edit 2");
+
+    // First edit subsequently fails
+    await act(async () => {
+      patch1.resolve({ ok: false, status: 500 });
+    });
+
+    // Stale rollback should NOT restore "Original prompt"
+    expect(shellProps.messages[0].content).toBe("Prompt edit 2");
   });
 });

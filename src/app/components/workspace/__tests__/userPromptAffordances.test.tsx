@@ -194,6 +194,25 @@ describe("user prompt affordances", () => {
     expect(promptText()?.className).not.toContain("line-clamp");
     expect(buttonByText("Show more")).toBeUndefined();
   });
+
+  it("caps the hidden mirror span and container at max-h-[220px]", () => {
+    mount(
+      <MessageBubble
+        message={userMsg("What does OwnerRepository do?")}
+        onCitationClick={() => {}}
+      />,
+    );
+    const editBtn = container?.querySelector('button[title="Edit message"]');
+    act(() => {
+      (editBtn as HTMLButtonElement)?.click();
+    });
+    const textarea = container?.querySelector("textarea");
+    const mirror = container?.querySelector("span[aria-hidden]");
+    const grid = textarea?.parentElement;
+    expect(mirror?.className).toContain("max-h-[220px]");
+    expect(mirror?.className).toContain("overflow-hidden");
+    expect(grid?.className).toContain("max-h-[220px]");
+  });
 });
 
 describe("composer message limit", () => {

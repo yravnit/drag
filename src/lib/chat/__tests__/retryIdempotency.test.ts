@@ -278,21 +278,71 @@ describe("Chat Retry & Idempotency Audit (5D)", () => {
     });
 
     expect(result.ok).toBe(true);
+    if (result.ok) {
+      const reader = result.stream.getReader();
+      while (!(await reader.read()).done) {}
+    }
 
     // ZERO inserts: does not insert a new user prompt or an extra assistant bubble
     expect(inserts).toHaveLength(0);
     expect(deletes).toHaveLength(0);
 
-    // Replaces the authorized assistant message row in place
+    // Replaces the authorized assistant message row in place with atomic claim
     expect(updates.length).toBeGreaterThanOrEqual(1);
     expect(updates[0].set.status).toBe("streaming");
-    expect(whereSql(updates[0].where).params).toEqual(["a-1"]);
+    expect(typeof updates[0].set.attemptId).toBe("string");
+    expect(updates[0].set.attemptId).toBeTruthy();
+
+    const claimWhere = whereSql(updates[0].where);
+    expect(claimWhere.params).toEqual(["a-1", "streaming"]);
+    expect(claimWhere.sql).toContain('"status" <> $2');
+
+    // Completion write requires the same attempt ID
+    const completionUpdate = updates.find((u) => u.set.status === "completed");
+    expect(completionUpdate).toBeDefined();
+    const completionWhere = whereSql(completionUpdate!.where);
+    expect(completionWhere.params).toEqual(["target-assistant-1", updates[0].set.attemptId]);
+    expect(completionWhere.sql).toContain('"attempt_id" = $2');
 
     // Model history contains earlier turn plus current prompt, no duplication
     const userRoleMessages = capturedLlmMessages.filter((m) => m.role === "user");
     expect(userRoleMessages).toHaveLength(2);
     expect(userRoleMessages[0].content).toBe("Earlier question");
     expect(userRoleMessages[1].content).toBe("What is X?");
+  });
+
+  it("returns 409 when target assistant message is already streaming", async () => {
+    const selectQueue = [
+      Promise.resolve([{ id: "conv-1", repositoryId: "repo-1", userId: "user-1" }]),
+      Promise.resolve([{ id: "repo-1", owner: "octocat", name: "drag" }]),
+      Promise.resolve([{ userId: "user-1", repositoryId: "repo-1", hasAccess: true, verifiedAt: new Date() }]),
+      // Target assistant message is currently streaming
+      Promise.resolve([{ id: "a-1", conversationId: "conv-1", role: "assistant", status: "streaming", createdAt: new Date() }]),
+    ];
+
+    const { db } = makeStubDb(selectQueue);
+
+    const deps: ConversationChatDeps = {
+      database: db as any,
+      embedQuery: async () => [0.1, 0.2, 0.3],
+      retrieve: async () => fixtureChunks,
+      streamLLM: async () => (async function* () {})(),
+    };
+
+    const result = await answerConversation(deps, {
+      userId: "user-1",
+      conversationId: "conv-1",
+      message: "What is X?",
+      isRegenerate: true,
+      regenerateMessageId: "a-1",
+      getGithubToken: async () => "token-1",
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.status).toBe(409);
+      expect(result.error).toContain("already being regenerated");
+    }
   });
 
   it("returns 404 when regenerateMessageId is not found or unauthorized", async () => {

@@ -1,6 +1,7 @@
+import { randomUUID } from "crypto";
 import { db, Database } from "@/db/db";
 import { conversations, messages, repositories, type Message } from "@/db/schema";
-import { and, desc, eq, isNull, lt, lte } from "drizzle-orm";
+import { and, desc, eq, isNull, lt, lte, ne } from "drizzle-orm";
 import { verifyRepositoryAccess } from "@/lib/access/repositoryAccess";
 import { retrieveChunks, RetrievedChunk } from "@/lib/retrieval/retriever";
 import { assembleContext } from "@/lib/retrieval/contextAssembler";
@@ -49,7 +50,7 @@ export function defaultConversationChatDeps(): ConversationChatDeps {
 }
 
 export type ConversationChatResult =
-  | { ok: false; status: 404 | 403 | 500; error: string }
+  | { ok: false; status: 404 | 403 | 409 | 500; error: string }
   | { ok: true; stream: ReadableStream };
 
 export async function answerConversation(
@@ -126,6 +127,13 @@ export async function answerConversation(
 
     if (!found) {
       return { ok: false, status: 404, error: "Message to regenerate not found" };
+    }
+    if (found.status === "streaming") {
+      return {
+        ok: false,
+        status: 409,
+        error: "Message is already being regenerated or currently streaming",
+      };
     }
     targetAssistantMsg = found;
 
@@ -237,7 +245,11 @@ export async function answerConversation(
       );
   }
 
-  // 5. Insert Assistant Message with status "streaming", or replace target answer on regenerate
+  // 5. Insert Assistant Message with status "streaming", or replace target answer on regenerate.
+  // When regenerating, claim the message with an atomic status check requiring status != "streaming".
+  // An attempt ID is attached to the row and required on every subsequent write, preventing an older
+  // stream from overwriting a newer answer or marking it failed after termination.
+  const attemptId = randomUUID();
   let assistantMsg: Message;
   if (targetAssistantMsg) {
     const [updated] = await deps.database
@@ -246,10 +258,24 @@ export async function answerConversation(
         content: "",
         status: "streaming",
         citations: null,
+        attemptId,
         updatedAt: new Date(),
       })
-      .where(eq(messages.id, targetAssistantMsg.id))
+      .where(
+        and(
+          eq(messages.id, targetAssistantMsg.id),
+          ne(messages.status, "streaming"),
+        ),
+      )
       .returning();
+
+    if (!updated) {
+      return {
+        ok: false,
+        status: 409,
+        error: "Message is already being regenerated or currently streaming",
+      };
+    }
     assistantMsg = updated;
   } else {
     const [inserted] = await deps.database
@@ -259,6 +285,7 @@ export async function answerConversation(
         role: "assistant",
         content: "",
         status: "streaming",
+        attemptId,
       })
       .returning();
     assistantMsg = inserted;
@@ -290,7 +317,12 @@ export async function answerConversation(
         content: `Embedding generation failed: ${errorMsg}`,
         updatedAt: new Date(),
       })
-      .where(eq(messages.id, assistantMsg.id));
+      .where(
+        and(
+          eq(messages.id, assistantMsg.id),
+          eq(messages.attemptId, attemptId),
+        ),
+      );
     return { ok: false, status: 500, error: errorMsg };
   }
 
@@ -346,7 +378,12 @@ export async function answerConversation(
         content: `Error occurred during processing: ${errorMsg}`,
         updatedAt: new Date(),
       })
-      .where(eq(messages.id, assistantMsg.id));
+      .where(
+        and(
+          eq(messages.id, assistantMsg.id),
+          eq(messages.attemptId, attemptId),
+        ),
+      );
     return { ok: false, status: 500, error: errorMsg };
   }
 
@@ -365,7 +402,7 @@ export async function answerConversation(
         }
 
         if (!aborted) {
-          // Save final completed message state
+          // Save final completed message state scoped to the matching attempt ID
           await deps.database
             .update(messages)
             .set({
@@ -374,7 +411,12 @@ export async function answerConversation(
               citations,
               updatedAt: new Date(),
             })
-            .where(eq(messages.id, assistantMsg.id));
+            .where(
+              and(
+                eq(messages.id, assistantMsg.id),
+                eq(messages.attemptId, attemptId),
+              ),
+            );
 
           logStructuredEvent({
             event: "chat_llm_stream",
@@ -409,7 +451,12 @@ export async function answerConversation(
             status: "failed",
             updatedAt: new Date(),
           })
-          .where(eq(messages.id, assistantMsg.id));
+          .where(
+            and(
+              eq(messages.id, assistantMsg.id),
+              eq(messages.attemptId, attemptId),
+            ),
+          );
       } finally {
         controller.close();
       }
@@ -432,7 +479,12 @@ export async function answerConversation(
           status: "failed",
           updatedAt: new Date(),
         })
-        .where(eq(messages.id, assistantMsg.id));
+        .where(
+          and(
+            eq(messages.id, assistantMsg.id),
+            eq(messages.attemptId, attemptId),
+          ),
+        );
     },
   });
 

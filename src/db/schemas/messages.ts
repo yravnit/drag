@@ -22,6 +22,9 @@ export const messages = snakeCase.table(
     content: text("content").notNull(),
     citations: jsonb("citations"),
     status: text("status").$type<MessageStatus>().notNull(),
+    // Identifies the attempt/stream worker currently owning writes for this assistant message.
+    // Regeneration claims the message atomically and future stream writes require a matching attempt id.
+    attemptId: text("attempt_id"),
     createdAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp({ withTimezone: true })
       .defaultNow()

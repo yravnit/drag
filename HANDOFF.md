@@ -220,7 +220,7 @@ Caches GitHub repository read checks. Stale after 1 hour (TTL: 3600000 ms). Uniq
 Tethers user thread contexts to repositories and user IDs.
 
 ### `messages`
-Presents context threads. `status` is constrained by `messages_status_check` to `pending | streaming | completed | failed` (migration `20261006161125_messages_status_check`, applied to Neon), and the column is `$type<MessageStatus>()` so a bad literal is also a compile error. Citations stored as JSONB metadata.
+Presents context threads. `status` is constrained by `messages_status_check` to `pending | streaming | completed | failed` (migration `20261006161125_messages_status_check`, applied to Neon), and the column is `$type<MessageStatus>()` so a bad literal is also a compile error. Citations stored as JSONB metadata. `attempt_id`: text column. Identifies the stream worker currently holding write ownership for this assistant message. Regeneration claims the row atomically and all subsequent stream updates require a matching attempt ID.
 
 ### `rate_limits`
 Persistent Postgres rate limits to prevent serverless cold starts breaking checks. Also tracks calendar month RAG query quotas with action `rag-monthly-quota`.
@@ -282,6 +282,7 @@ Stores validated NVIDIA chat model availability from weekly cron probe runs:
 30. **The benchmark shares production ranking code**: fusion lives in `src/lib/retrieval/fusion.ts` (no database import) and both the retriever and the benchmark call it. `searchLexicalBaseline` now assigns one tier per chunk from `LEXICAL_TIER`, mirroring the `CASE` in `retrieveChunksLexical`, instead of accumulating path and per-term scores. A copied or divergent implementation let a change that worsened real search keep the CI score unchanged.
 31. **Workflow ingest route enforces the same policy as the UI route**: `POST /api/workflows/ingest-repository` resolves the plan branch (even when `revision` is omitted) and assigns it to the workflow payload, checks tree truncation, file count, and repository size via `assertPlanRepositoryEntitlements`, and creates the `repositories` row plus `user_repositories` association inside the limit-check transaction. It also enforces the shared-repository branch guard: `repositories` rows are keyed by `github_id` and shared across users, so a request for a branch other than the existing `default_branch` is rejected with **409** rather than re-indexing the shared row and serving another branch's code to every other associated user. Covered by `ingest-repository/__tests__/route.test.ts`.
 32. **The chat prompt must never quote the phrasing it forbids**: the answer prompt in `conversation.ts` deliberately carries no blacklist of banned openings, because naming them is what produced them — the model sees the forbidden wording adjacent to the question and echoes it back. State the wanted behaviour instead ("your opening sentence responds to the question"), and never let the prompt refer to its own input as a "retrieved context". `buildSystemPrompt.test.ts` fails if any forbidden opening reappears in the prompt text. Verify new prompt rules against a live model before keeping them: of the four rules tried in this round, one had to be reverted outright and another reshaped, because a rule telling the model to name the source as "the repository or the code" made the leak *worse* by licensing a trailing "in the provided code" inside the opening sentence.
+33. **Stream writes are attempt-owned and regeneration claims atomically**: `answerConversation` claims an assistant message with an atomic check requiring `messages.status != 'streaming'`. It writes an attempt UUID to the message row and scopes every subsequent status, chunk, and failure write to `(id, attemptId)`. A slower or cancelled stream cannot overwrite a newer answer or mark it failed after it terminates. In the workspace UI, `handleEditMessage` checks a monotonic edit sequence counter before rolling back optimistic text, so an earlier failed save never clobbers a newer edit that succeeded.
 
 ---
 
@@ -637,6 +638,17 @@ The following fixes resolved `npm ci` failures in GitHub Actions and local `npm 
 - **Enabled legacy peer dependencies configuration.** Created `.npmrc` with `legacy-peer-deps=true`. This allows npm to accept `drizzle-orm@^1.0.0-rc.4` and `drizzle-kit@^1.0.0-rc.4` alongside `@better-auth/drizzle-adapter@1.6.24` and `better-auth@1.6.24` without tripping strict peer resolution checks in npm 7+.
 - **Clean lockfile regeneration.** Regenerated `package-lock.json` using `npm install --package-lock-only`. The missing lockfile entries (including `@nestjs/common` and transitive packages) were reconciled. `npm ci --dry-run` and clean `npm install` now succeed without errors.
 - **Test discriminated union narrowing.** Updated `src/lib/chat/__tests__/retryIdempotency.test.ts` to narrow `result.ok` before asserting `result.status`, satisfying TypeScript type checking on `ConversationChatResult` and oxlint `unicorn/no-thenable` checks.
+
+---
+
+## 16. Regeneration claim concurrency, edit rollback scoping, and mirror height containment (2026-10-09)
+
+The following fixes harden stream concurrency, edit state recovery, and prompt editor layout:
+
+- **Atomic message regeneration claim and attempt ID ownership.** `src/lib/chat/conversation.ts` assigns an `attemptId` UUID to every assistant message and claims rows with `ne(messages.status, "streaming")`. If a message is already streaming, it rejects the request with HTTP 409. All subsequent writes during embedding, retrieval, stream completion, or abortion require `and(eq(messages.id, assistantMsg.id), eq(messages.attemptId, attemptId))`. Older or disconnected streams can no longer overwrite a newer generation or mark it failed.
+- **Edit rollback request ID scoping.** `src/app/workspace/page.tsx` introduces a monotonic `messageEditSeqRef` counter map for edited messages. When a `PATCH` request fails or experiences a network error, it verifies `messageEditSeqRef.current.get(messageId) === editSeq` before rolling back the optimistic UI state. An earlier failed edit can no longer roll back a subsequent successful edit.
+- **Dynamic edit bubble mirror height containment.** `src/app/components/workspace/MessageBubble.tsx` applies `max-h-[220px] overflow-hidden` to the hidden mirror span and `max-h-[220px]` to the shared grid wrapper. The container expands naturally for short text and caps cleanly at 220px alongside the textarea for long prompts, keeping Save and Cancel controls positioned directly beneath the editor.
+
 
 
 

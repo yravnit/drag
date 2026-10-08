@@ -143,6 +143,7 @@ describe("Production Database Safety & Lifecycle Audit (5B)", () => {
     it("defines message status column supporting streaming and failure recovery", () => {
       expect(messages.status).toBeDefined();
       expect(messages.citations).toBeDefined();
+      expect(messages.attemptId).toBeDefined();
     });
 
     it("defines a persisted sort_order on user_repositories and conversations", () => {

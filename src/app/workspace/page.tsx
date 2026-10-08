@@ -138,6 +138,11 @@ export default function Home() {
     ids: [],
   });
 
+  // Monotonic edit request sequence per message.
+  // When an edit fails, only roll back if this request is still the newest edit for this message.
+  // Otherwise, a slow failure from an earlier edit would roll back a newer edit that already succeeded.
+  const messageEditSeqRef = useRef<Map<string, number>>(new Map());
+
   // Repository id requested via query params `?repo=<id>`.
   const pendingRepoSelectionRef = useRef<string | null>(null);
 
@@ -962,6 +967,9 @@ export default function Home() {
       const previousMessage = messagesList.find((msg) => msg.id === messageId);
       const originalContent = previousMessage?.content ?? "";
 
+      const editSeq = (messageEditSeqRef.current.get(messageId) ?? 0) + 1;
+      messageEditSeqRef.current.set(messageId, editSeq);
+
       setMessagesList((prev) =>
         prev.map((msg) => (msg.id === messageId ? { ...msg, content: trimmed } : msg)),
       );
@@ -978,20 +986,24 @@ export default function Home() {
             const data = await res.json().catch(() => null);
             const errText = data?.error || `Failed to save edited message (${res.status})`;
             setChatError(errText);
+            if (messageEditSeqRef.current.get(messageId) === editSeq) {
+              setMessagesList((prev) =>
+                prev.map((msg) =>
+                  msg.id === messageId ? { ...msg, content: originalContent } : msg,
+                ),
+              );
+            }
+          }
+        } catch (err) {
+          console.error("Failed to persist edited message:", err);
+          setChatError("Network error: Failed to save edited message");
+          if (messageEditSeqRef.current.get(messageId) === editSeq) {
             setMessagesList((prev) =>
               prev.map((msg) =>
                 msg.id === messageId ? { ...msg, content: originalContent } : msg,
               ),
             );
           }
-        } catch (err) {
-          console.error("Failed to persist edited message:", err);
-          setChatError("Network error: Failed to save edited message");
-          setMessagesList((prev) =>
-            prev.map((msg) =>
-              msg.id === messageId ? { ...msg, content: originalContent } : msg,
-            ),
-          );
         }
       }
     },
