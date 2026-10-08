@@ -40,10 +40,24 @@ export function StatsSection() {
   const files = useCountUp(50_000, inView, prefersReduced);
 
   const stats = [
-    { value: `${dimensions}D`, label: "Embedding Dimensions" },
-    { value: `Up to ${files.toLocaleString()}`, label: "Files per Repository" },
-    { value: "Up to 1 GB", label: "Repository Size Limit" },
-    { value: "< 500ms", label: "Incremental Sync Speed" },
+    {
+      value: `${dimensions}D`,
+      label: "Embedding Dimensions",
+    },
+    {
+      prefix: "Up to",
+      value: files.toLocaleString(),
+      label: "Files per Repository",
+    },
+    {
+      prefix: "Up to",
+      value: "1 GB",
+      label: "Repository Size Limit",
+    },
+    {
+      value: "< 500ms",
+      label: "Incremental Sync Speed",
+    },
   ];
 
   return (
@@ -51,14 +65,21 @@ export function StatsSection() {
       ref={ref}
       className="border-b border-line bg-page-2 transition-colors duration-200 ease-out"
     >
-      <div className={`${PAGE_CONTAINER} py-16`}>
-        <div className="grid grid-cols-1 gap-10 sm:grid-cols-2 xl:grid-cols-4 xl:gap-x-6">
+      <div className={`${PAGE_CONTAINER} py-14 lg:py-16`}>
+        <div className="grid grid-cols-1 gap-10 sm:grid-cols-2 lg:grid-cols-4 lg:gap-6 xl:gap-8">
           {stats.map((stat) => (
-            <div key={stat.label} className="text-center">
-              <span className="inline-block font-display text-5xl leading-none font-semibold tracking-display whitespace-nowrap tabular-nums text-ink">
-                {stat.value}
-              </span>
-              <div className="mt-2.5 text-sm font-semibold tracking-[-0.02em] text-ink-3">
+            <div key={stat.label} className="flex flex-col items-center justify-center text-center">
+              <div className="flex items-baseline justify-center gap-1.5 whitespace-nowrap">
+                {stat.prefix && (
+                  <span className="font-display text-lg sm:text-xl lg:text-2xl font-medium tracking-normal text-ink-3 select-none">
+                    {stat.prefix}
+                  </span>
+                )}
+                <span className="font-display text-4xl sm:text-4xl lg:text-[2.75rem] xl:text-5xl leading-none font-semibold tracking-tight tabular-nums text-ink">
+                  {stat.value}
+                </span>
+              </div>
+              <div className="mt-3 text-sm font-medium tracking-[-0.01em] text-ink-3">
                 {stat.label}
               </div>
             </div>
