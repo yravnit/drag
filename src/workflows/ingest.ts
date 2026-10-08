@@ -228,9 +228,8 @@ async function runIngestionStep(
             console.warn(
               `[Step] Warning: Failed to process file ${res.file.relativePath}: ${res.error}. Skipping file.`,
             );
-          }
-
-          if (res.chunks && res.chunks.length > 0 && !res.tempChunksPath) {
+            res.chunks = [];
+          } else if (res.chunks && res.chunks.length > 0 && !res.tempChunksPath) {
             const safeName = res.file.relativePath.replace(/[^a-zA-Z0-9.-]/g, "_");
             const tempPath = path.join(
               workspacePath,
