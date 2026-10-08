@@ -200,5 +200,39 @@ MIIDXTCCAkWgAwIBAgIJ...
 
     expect(isSensitiveFile("src/key.txt", rsaKey)).toBe(true);
     expect(isSensitiveFile("src/code.ts", regularCode)).toBe(false);
+
+    // Lone carriage returns as line boundaries
+    expect(isSensitiveContent("\r-----BEGIN RSA PRIVATE KEY-----\r")).toBe(true);
+    expect(isSensitiveContent("\r-----BEGIN PGP PRIVATE KEY BLOCK-----\r")).toBe(true);
+    expect(isSensitiveContent("\r-----BEGIN CERTIFICATE-----\r")).toBe(true);
+
+    // Embedded keys in source strings / template literals preceded by code
+    const jsTemplateLiteralKey =
+      "const key = `-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA0Y...\n-----" +
+      "END RSA PRIVATE KEY-----`;";
+    const jsStringLiteralKey =
+      'const key = "-----BEGIN OPENSSH PRIVATE KEY-----\\nb3BlbnNza...\\n-----' +
+      'END OPENSSH PRIVATE KEY-----";';
+    const jsEmbeddedCert =
+      "const cert = `-----BEGIN CERTIFICATE-----\nMIIDXTCCAkWgAwIBAgIJ...\n-----" +
+      "END CERTIFICATE-----`;";
+    const jsEmbeddedPgpKey =
+      "const pgp = `-----BEGIN PGP PRIVATE KEY BLOCK-----\nVersion: BCPG...\n-----" +
+      "END PGP PRIVATE KEY BLOCK-----`;";
+    expect(isSensitiveContent(jsTemplateLiteralKey)).toBe(true);
+    expect(isSensitiveContent(jsStringLiteralKey)).toBe(true);
+    expect(isSensitiveContent(jsEmbeddedCert)).toBe(true);
+    expect(isSensitiveContent(jsEmbeddedPgpKey)).toBe(true);
+
+    // Documentation and code regexes should not trigger false positives
+    const documentationProse =
+      "Skipping files matching (-----BEGIN ... PRIVATE KEY----- or -----BEGIN CERTIFICATE-----)";
+    const regexDeclaration = "const certPattern = /-----BEGIN CERTIFICATE-----/i;";
+    expect(isSensitiveContent(documentationProse)).toBe(false);
+    expect(isSensitiveContent(regexDeclaration)).toBe(false);
+
+    // Scanner file itself should not trigger false positives
+    const fileFilterSrc = fs.readFileSync(path.resolve(__dirname, "../fileFilter.ts"), "utf-8");
+    expect(isSensitiveContent(fileFilterSrc)).toBe(false);
   });
 });

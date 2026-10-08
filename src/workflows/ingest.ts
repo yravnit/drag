@@ -125,10 +125,9 @@ async function runIngestionStep(
       let ownerUserId = payload.userId;
       if (!ownerUserId) {
         try {
-          const isUuid =
-            /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-              existingRepo.id,
-            );
+          const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+            existingRepo.id,
+          );
           if (isUuid) {
             const assocs = await db
               .select({ userId: userRepositories.userId })
@@ -212,7 +211,10 @@ async function runIngestionStep(
     }
 
     const parserManager = new TreeSitterParserManager();
-    const batchProcessor = new BatchProcessor(parserManager, { batchSize });
+    const batchProcessor = new BatchProcessor(parserManager, {
+      batchSize,
+      spillChunksTo: workspacePath,
+    });
     const processedFiles: ProcessedFileResult[] = [];
 
     try {
@@ -226,9 +228,8 @@ async function runIngestionStep(
             console.warn(
               `[Step] Warning: Failed to process file ${res.file.relativePath}: ${res.error}. Skipping file.`,
             );
-          }
-
-          if (res.chunks && res.chunks.length > 0) {
+            res.chunks = [];
+          } else if (res.chunks && res.chunks.length > 0 && !res.tempChunksPath) {
             const safeName = res.file.relativePath.replace(/[^a-zA-Z0-9.-]/g, "_");
             const tempPath = path.join(
               workspacePath,
@@ -296,10 +297,9 @@ async function runIngestionStep(
 async function triggerEmbeddingsStep(repositoryId: string): Promise<void> {
   "use step";
   console.log(`[Step] Triggering embeddings workflow for repository ID: ${repositoryId}`);
-  const isUuid =
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-      repositoryId,
-    );
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    repositoryId,
+  );
   if (isUuid) {
     try {
       await clearEmbeddingLease(db, repositoryId);

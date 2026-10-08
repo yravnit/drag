@@ -53,20 +53,21 @@ export class BatchProcessor {
     for (let i = 0; i < files.length; i += this.batchSize) {
       const batch = files.slice(i, i + this.batchSize);
 
-      const batchPromises = batch.map(async (file): Promise<ProcessedFileResult> => {
+      for (const file of batch) {
         try {
           const content = await fs.promises.readFile(file.absolutePath, "utf-8");
           if (isSensitiveContent(content)) {
             console.warn(
               `[BatchProcessor] Skipping file containing sensitive credentials or private keys: ${file.relativePath}`,
             );
-            return {
+            results.push({
               file,
               chunks: [],
               contentHash: "",
               sizeBytes: 0,
               error: "File contains sensitive credentials or private keys",
-            };
+            });
+            continue;
           }
           const contentHash = BatchProcessor.computeContentHash(content);
           const sizeBytes = Buffer.byteLength(content, "utf-8");
@@ -82,50 +83,49 @@ export class BatchProcessor {
               await fs.promises.mkdir(path.dirname(tempPath), { recursive: true });
               await fs.promises.writeFile(tempPath, JSON.stringify(chunks), "utf-8");
               chunks = [];
-              return {
+              results.push({
                 file,
                 chunks,
                 contentHash,
                 sizeBytes,
                 tempChunksPath: tempPath,
-              };
+              });
+              continue;
             } catch (spillError) {
               // Spill failure is treated as a per-file error (does not abort the batch)
               console.error(
                 `Skipping file due to chunk spill error: ${file.relativePath}`,
                 spillError,
               );
-              return {
+              results.push({
                 file,
                 chunks,
                 contentHash,
                 sizeBytes,
-                error:
-                  (spillError as Error).message || String(spillError),
-              };
+                error: (spillError as Error).message || String(spillError),
+              });
+              continue;
             }
           }
 
-          return {
+          results.push({
             file,
             chunks,
             contentHash,
             sizeBytes,
-          };
+          });
         } catch (error) {
           console.error(`Skipping file due to parsing/reading error: ${file.relativePath}`, error);
-          return {
+          results.push({
             file,
             chunks: [],
             contentHash: "",
             sizeBytes: 0,
             error: (error as Error).message || String(error),
-          };
+          });
         }
-      });
+      }
 
-      const batchResults = await Promise.all(batchPromises);
-      results.push(...batchResults);
       processedCount += batch.length;
 
       if (onProgress) {

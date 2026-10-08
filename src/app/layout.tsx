@@ -1,20 +1,23 @@
 import type { Metadata } from "next";
-import { Manrope, Fira_Code } from "next/font/google";
 import localFont from "next/font/local";
 import { ThemeProvider } from "@/components/theme/ThemeProvider";
 import { themeInitScript } from "@/components/theme/theme-init";
 import "./globals.css";
 
-const manrope = Manrope({
+const manrope = localFont({
+  src: "./fonts/manrope/Manrope-Variable.woff2",
   variable: "--font-manrope",
-  subsets: ["latin"],
   display: "swap",
 });
 
-const firaCode = Fira_Code({
+const firaCode = localFont({
+  src: [
+    { path: "./fonts/fira-code/FiraCode-Regular.woff2", weight: "400", style: "normal" },
+    { path: "./fonts/fira-code/FiraCode-Medium.woff2", weight: "500", style: "normal" },
+    { path: "./fonts/fira-code/FiraCode-SemiBold.woff2", weight: "600", style: "normal" },
+    { path: "./fonts/fira-code/FiraCode-Bold.woff2", weight: "700", style: "normal" },
+  ],
   variable: "--font-fira-code",
-  subsets: ["latin"],
-  weight: ["400", "500", "600"],
   display: "swap",
 });
 

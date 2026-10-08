@@ -184,14 +184,29 @@ export function isSensitiveContent(content: string): boolean {
     return false;
   }
 
-  const privateKeyPattern = /-----BEGIN(?: [A-Z0-9_-]+)? PRIVATE KEY-----/i;
-  const pgpPrivateKeyPattern = /-----BEGIN PGP PRIVATE KEY BLOCK-----/i;
-  const certPattern = /-----BEGIN CERTIFICATE-----/i;
+  // Line-anchored patterns recognizing LF, CRLF, and lone CR line boundaries
+  const privateKeyPattern =
+    /(?:^|\r\n?|\n)\s*-----BEGIN(?: [A-Z0-9_-]+)? PRIVATE KEY-----\s*(?:\r\n?|\n|$)/i;
+  const pgpPrivateKeyPattern =
+    /(?:^|\r\n?|\n)\s*-----BEGIN PGP PRIVATE KEY BLOCK-----\s*(?:\r\n?|\n|$)/i;
+  const certPattern =
+    /(?:^|\r\n?|\n)\s*-----BEGIN CERTIFICATE-----\s*(?:\r\n?|\n|$)/i;
+
+  // Complete embedded key blocks (e.g. in string literals or code)
+  const embeddedPrivateKeyPattern =
+    /-----BEGIN(?: [A-Z0-9_-]+)? PRIVATE KEY-----[\s\S]+?-----\x45ND(?: [A-Z0-9_-]+)? PRIVATE KEY-----/i;
+  const embeddedPgpPrivateKeyPattern =
+    /-----BEGIN PGP PRIVATE KEY BLOCK-----[\s\S]+?-----\x45ND PGP PRIVATE KEY BLOCK-----/i;
+  const embeddedCertPattern =
+    /-----BEGIN CERTIFICATE-----[\s\S]+?-----\x45ND CERTIFICATE-----/i;
 
   return (
     privateKeyPattern.test(content) ||
     pgpPrivateKeyPattern.test(content) ||
-    certPattern.test(content)
+    certPattern.test(content) ||
+    embeddedPrivateKeyPattern.test(content) ||
+    embeddedPgpPrivateKeyPattern.test(content) ||
+    embeddedCertPattern.test(content)
   );
 }
 

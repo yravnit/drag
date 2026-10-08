@@ -260,6 +260,57 @@ describe('ingestRepository workflow', () => {
     expect(mockStart).toHaveBeenCalledWith(expect.any(Function), [{ repositoryId: 'repo-uuid-123' }]);
   });
 
+  it('skips write path and empties chunks when batch processor reports an error on a file with leftover chunks', async () => {
+    const writeFileSpy = vi.spyOn(fs.promises, 'writeFile');
+    const failedSpillFile = {
+      relativePath: 'src/spill-fail.ts',
+      absolutePath: '/tmp/src/spill-fail.ts',
+      category: 'source',
+      language: 'typescript',
+    };
+    mockDiscover.mockResolvedValue([failedSpillFile]);
+    const failedResult: {
+      file: typeof failedSpillFile;
+      chunks: Array<{
+        chunkType: string;
+        text: string;
+        startLine: number;
+        endLine: number;
+        symbolName: string;
+        language: string;
+      }>;
+      contentHash: string;
+      sizeBytes: number;
+      error: string;
+      tempChunksPath?: string;
+    } = {
+      file: failedSpillFile,
+      chunks: [
+        {
+          chunkType: 'function',
+          text: 'spillFail',
+          startLine: 1,
+          endLine: 5,
+          symbolName: 'sf',
+          language: 'typescript',
+        },
+      ],
+      contentHash: 'h-spill',
+      sizeBytes: 10,
+      error: 'Disk write failure',
+    };
+    mockProcessFiles.mockResolvedValue([failedResult]);
+
+    const result = await ingestRepository(DEFAULT_PAYLOAD);
+
+    expect(result.success).toBe(true);
+    expect(result.skippedFilesCount).toBe(1);
+    expect(failedResult.chunks).toHaveLength(0);
+    expect(failedResult.tempChunksPath).toBeUndefined();
+    expect(writeFileSpy).not.toHaveBeenCalled();
+    writeFileSpy.mockRestore();
+  });
+
   it('advances headCommitSha when git commit changes only ignored files', async () => {
     mockGetRepositoryByUrl.mockResolvedValue({
       id: 'repo-uuid-existing',
