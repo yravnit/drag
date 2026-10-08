@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { memo, useState, useEffect } from "react";
 import { FileCode, X, Copy, Check, ExternalLink, AlertCircle, Download, Loader2 } from "lucide-react";
 import type { Citation, WorkspaceRepository } from "./types";
 
@@ -61,7 +61,7 @@ function highlightCodeLine(line: string): React.ReactNode {
   );
 }
 
-export function CitationDrawer({ citation, repository, onClose }: CitationDrawerProps) {
+function CitationDrawerImpl({ citation, repository, onClose }: CitationDrawerProps) {
   const [copied, setCopied] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [downloaded, setDownloaded] = useState(false);
@@ -301,3 +301,6 @@ export function CitationDrawer({ citation, repository, onClose }: CitationDrawer
     </>
   );
 }
+
+// memo: composer keystrokes change only messageText, which none of these read.
+export const CitationDrawer = memo(CitationDrawerImpl);

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { memo, useEffect, useState } from "react";
 import { X, Check, Shield, Building2 } from "lucide-react";
 import { formatLimit } from "./formatters";
 import type { PlanUsageData } from "./types";
@@ -11,7 +11,7 @@ interface PlanUsageModalProps {
   planUsage: PlanUsageData | null;
 }
 
-export function PlanUsageModal({
+function PlanUsageModalImpl({
   isOpen,
   onClose,
   planUsage,
@@ -70,7 +70,7 @@ export function PlanUsageModal({
               <div className="font-bold text-sm text-amber-300">
                 BOSS Mode Active
               </div>
-              <p className="text-zinc-300 text-[11px] leading-relaxed">
+              <p className="text-zinc-200 text-xs leading-relaxed">
                 Infinite repositories, unmetered monthly queries, all branch selection unlocked, unlimited file count and storage. Reserved exclusively for the workspace administrator.
               </p>
             </div>
@@ -79,18 +79,18 @@ export function PlanUsageModal({
           {/* Current Usage Status (Free / Hobby limits display) */}
           {entitlements && usage && (
             <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-4">
-              <h4 className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-3">
+              <h4 className="text-xs font-bold text-zinc-300 uppercase tracking-wider mb-3">
                 Current usage
               </h4>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {/* Repositories usage */}
                 <div className="p-3.5 rounded-lg bg-zinc-900/50 border border-zinc-850">
-                  <div className="text-[11px] text-zinc-400 font-medium">Repositories</div>
+                  <div className="text-xs text-zinc-300 font-medium">Repositories</div>
                   <div className="mt-1 flex items-baseline gap-1.5">
                     <span className="text-2xl font-bold text-white">
                       {usage.repositoriesCount}
                     </span>
-                    <span className="text-xs text-zinc-500 font-mono">
+                    <span className="text-xs text-zinc-400 font-mono">
                       / {formatLimit(entitlements.repositoryLimit)}
                     </span>
                   </div>
@@ -106,12 +106,12 @@ export function PlanUsageModal({
 
                 {/* RAG query quota usage */}
                 <div className="p-3.5 rounded-lg bg-zinc-900/50 border border-zinc-850">
-                  <div className="text-[11px] text-zinc-400 font-medium">RAG queries</div>
+                  <div className="text-xs text-zinc-300 font-medium">RAG queries</div>
                   <div className="mt-1 flex items-baseline gap-1.5">
                     <span className="text-2xl font-bold text-white">
                       {usage.monthlyQueriesCount}
                     </span>
-                    <span className="text-xs text-zinc-500 font-mono">
+                    <span className="text-xs text-zinc-400 font-mono">
                       {entitlements.monthlyQueryLimit !== null
                         ? `/ ${formatLimit(entitlements.monthlyQueryLimit)} this month`
                         : "queries this month (unmetered)"}
@@ -154,7 +154,7 @@ export function PlanUsageModal({
                 <div className="mt-3">
                   <span className="text-2xl font-extrabold text-white">₹0</span>
                 </div>
-                <p className="mt-2 text-xs text-zinc-400">
+                <p className="mt-2 text-xs text-zinc-300">
                   Free plan for personal experimentation
                 </p>
 
@@ -187,7 +187,7 @@ export function PlanUsageModal({
                     Active Plan
                   </button>
                 ) : (
-                  <span className="text-[11px] text-zinc-500 block text-center">Included</span>
+                  <span className="text-xs text-zinc-400 block text-center">Included</span>
                 )}
               </div>
             </div>
@@ -211,9 +211,9 @@ export function PlanUsageModal({
                 </div>
                 <div className="mt-3">
                   <span className="text-2xl font-extrabold text-white">₹499</span>
-                  <span className="text-xs text-zinc-400">/month</span>
+                  <span className="text-xs text-zinc-300">/month</span>
                 </div>
-                <p className="mt-2 text-xs text-zinc-400">
+                <p className="mt-2 text-xs text-zinc-300">
                   Hobby plan for active developers
                 </p>
 
@@ -257,7 +257,7 @@ export function PlanUsageModal({
                     Upgrade to Hobby
                   </button>
                 ) : (
-                  <span className="text-[11px] text-zinc-500 block text-center">Included</span>
+                  <span className="text-xs text-zinc-400 block text-center">Included</span>
                 )}
               </div>
             </div>
@@ -284,9 +284,9 @@ export function PlanUsageModal({
                 </div>
                 <div className="mt-3">
                   <span className="text-xl font-extrabold text-white">₹15,000*</span>
-                  <span className="text-xs text-zinc-400">/month</span>
+                  <span className="text-xs text-zinc-300">/month</span>
                 </div>
-                <p className="mt-2 text-xs text-zinc-400">
+                <p className="mt-2 text-xs text-zinc-300">
                   *Contact sales for custom pricing
                 </p>
 
@@ -326,7 +326,7 @@ export function PlanUsageModal({
                     Contact sales for custom pricing
                   </button>
                 ) : (
-                  <span className="text-[11px] text-zinc-500 block text-center">Included</span>
+                  <span className="text-xs text-zinc-400 block text-center">Included</span>
                 )}
               </div>
             </div>
@@ -349,3 +349,6 @@ export function PlanUsageModal({
     </div>
   );
 }
+
+// memo: composer keystrokes change only messageText, which none of these read.
+export const PlanUsageModal = memo(PlanUsageModalImpl);

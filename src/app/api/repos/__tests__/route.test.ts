@@ -94,19 +94,21 @@ let mockPendingChunks = false;
 /**
  * Thenable read stage that stays chainable, so `.where(...).limit(1).for("update")` composes the way
  * the route composes it. `all` is the bare read (the repository count), `limited` the `.limit(1)`
- * existence probe; a row lock reads the same set as the bare read.
+ * existence probe; a row lock reads the same set as the bare read. `lock` tags the lock with the
+ * query that asked for it, since one request can lock the same table more than once and a bare
+ * strength cannot tell the locks apart.
  */
 function readStage(
   rows: any[],
   stages: { all: () => any[]; limited: () => any[] },
-  locks: string[] = [],
+  lock?: { lookup: number; locks: { lookup: number; strength: string }[] },
 ): any {
   const stage = (resolved: any[]) =>
     Object.assign(Promise.resolve(resolved), {
       where: vi.fn(() => stage(stages.all())),
       limit: vi.fn(() => stage(stages.limited())),
       for: vi.fn((strength: string) => {
-        locks.push(strength);
+        if (lock) lock.locks.push({ lookup: lock.lookup, strength });
         return stage(stages.all());
       }),
       innerJoin: vi.fn(() => stage(stages.all())),
@@ -580,7 +582,9 @@ describe("POST /api/repos", () => {
     };
 
     let repositoryLookups = 0;
-    const locks: string[] = [];
+    // Each repositories select is tagged with its ordinal, so an assertion can name the query it
+    // needs. This request locks twice: lookup 2 is the URL fallback, lookup 3 the attach.
+    const locks: { lookup: number; strength: string }[] = [];
     const updates: any[] = [];
     mockDbSelect.mockImplementation(() => {
       const chain = createSelectChain();
@@ -590,9 +594,10 @@ describe("POST /api/repos", () => {
         const isRepositories =
           table?.githubId === "repositories_githubId" || table === "repositories";
         if (!isRepositories) return result;
-        repositoryLookups++;
-        const row = repositoryLookups === 1 ? [] : [concurrentRow];
-        return { ...result, where: vi.fn(() => readStage(row, { all: () => row, limited: () => row }, locks)) };
+        const lookup = ++repositoryLookups;
+        const row = lookup === 1 ? [] : [concurrentRow];
+        const lock = { lookup, locks };
+        return { ...result, where: vi.fn(() => readStage(row, { all: () => row, limited: () => row }, lock)) };
       });
       return chain;
     });
@@ -628,8 +633,9 @@ describe("POST /api/repos", () => {
     expect(updates.some((u) => typeof u.url === "string")).toBe(false);
     expect(inserted.some((v) => "githubId" in v)).toBe(false);
     // The judgment reads the row under a lock, so a second concurrent add cannot free or adopt it
-    // between the read and the decision.
-    expect(locks).toContain("update");
+    // between the read and the decision. Only lookup 2 — the URL fallback inside the transaction —
+    // counts here; the attach transaction's own lock (lookup 3) must not satisfy this assertion.
+    expect(locks).toContainEqual({ lookup: 2, strength: "update" });
   });
 
   it("does not touch the URL row when it is a legacy row with a null github_id", async () => {

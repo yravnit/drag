@@ -141,7 +141,7 @@ export function ConversationList({
       )}
 
       <div className="mt-2 space-y-1">
-        {isLoading ? (
+        {isLoading && conversations.length === 0 ? (
           <div className="py-3 text-center">
             <Loader2 className="h-4 w-4 animate-spin text-zinc-500 mx-auto" />
           </div>

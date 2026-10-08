@@ -8,8 +8,11 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-manrope);
-  --font-display: var(--font-nohemi);
+  /* Generic tails are load-bearing: `@theme inline` substitutes the var() value verbatim, so
+     without them the `font-sans`/`font-display` utilities resolve to a bare family list and a
+     failed webfont falls through to the browser's default serif instead of system-ui. */
+  --font-sans: var(--font-manrope), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-nohemi), var(--font-manrope), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-fira-code), ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
@@ -26,13 +29,13 @@ body {
   font-family: var(--font-manrope), ui-sans-serif, system-ui, sans-serif;
 }
 
-/* Display type: Nohemi for every heading, Manrope for everything else. */
-h1,
-h2,
-h3,
-h4 {
-  font-family: var(--font-nohemi), var(--font-manrope), ui-sans-serif, system-ui, sans-serif;
-}
+/* Display type: Nohemi is a display-only face, applied ONLY through the `font-display` utility
+   and only where the rendered size is >= ~24px. It must never be a blanket h1-h4 rule: Nohemi's
+   cap height is 7px at a 10px font-size and 11px at 48px, versus Manrope's 11px at 10px. Below
+   ~20px its strokes thin out, its counters fill in and its G reads visibly smaller than the
+   letters beside it, which is what made the wordmark and the small uppercase labels look broken.
+   Headings and labels under that size inherit Manrope, which has a UI-grade x-height.
+   Nohemi also ships 400/500/600/700 only, so `font-extrabold` (800) silently renders as 700. */
 
 @keyframes thinking-linear-sweep {
   0% {

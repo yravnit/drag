@@ -128,6 +128,11 @@ export function WorkspaceShell({
   onResponseModeChange,
 }: WorkspaceShellProps) {
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+  const closeMobileSidebar = React.useCallback(() => setIsMobileSidebarOpen(false), []);
+  const toggleMobileSidebar = React.useCallback(
+    () => setIsMobileSidebarOpen((prev) => !prev),
+    [],
+  );
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-[#0a0a0c] text-zinc-100 font-sans">
@@ -143,7 +148,7 @@ export function WorkspaceShell({
         convsLoading={convsLoading}
         convsError={convsError}
         isMobileOpen={isMobileSidebarOpen}
-        onCloseMobile={() => setIsMobileSidebarOpen(false)}
+        onCloseMobile={closeMobileSidebar}
         onSelectRepo={onSelectRepo}
         onDeleteRepo={onDeleteRepo}
         onRetryRepo={onRetryRepo}
@@ -174,7 +179,7 @@ export function WorkspaceShell({
               >
                 <Menu className="h-5 w-5" />
               </button>
-              <span className="font-display text-xs font-bold text-white">DRAG Workspace</span>
+              <span className="text-xs font-bold text-white">DRAG Workspace</span>
             </div>
 
             <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
@@ -210,7 +215,7 @@ export function WorkspaceShell({
             onCitationClick={onCitationClick}
             onCreateConversation={onCreateConversation}
             onRetryRepo={onRetryRepo}
-            onToggleMobileSidebar={() => setIsMobileSidebarOpen((prev) => !prev)}
+            onToggleMobileSidebar={toggleMobileSidebar}
             onSuggestionClick={onSuggestionClick}
             onRetryMessage={onRetryMessage}
             selectedModel={selectedModel}

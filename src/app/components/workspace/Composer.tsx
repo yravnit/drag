@@ -1,8 +1,11 @@
 "use client";
 
-import React, { useRef, useEffect } from "react";
+import React from "react";
 import { Send, ShieldAlert, Loader2 } from "lucide-react";
-import type { ResponseMode } from "./types";
+import { MAX_CHAT_MESSAGE_LENGTH, type ResponseMode } from "./types";
+
+/** Show the remaining count only once the prompt is close enough for the limit to matter. */
+const COUNTER_THRESHOLD = MAX_CHAT_MESSAGE_LENGTH * 0.9;
 
 interface ComposerProps {
   messageText: string;
@@ -23,15 +26,15 @@ export function Composer({
   onMessageChange,
   onSubmit,
 }: ComposerProps) {
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // The textarea grows natively via `field-sizing-content`. The old resize effect set
+  // `style.height = "auto"` and read `scrollHeight` on every keystroke, forcing a synchronous
+  // reflow of the document per character, and because the composer's height feeds the message
+  // list's box it also invalidated that container's scroll geometry on each character.
 
-  // Auto-resize textarea height based on content
-  useEffect(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "auto";
-      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 160)}px`;
-    }
-  }, [messageText]);
+  // `maxLength` does the limiting natively, so there is no truncation path to keep in sync and the
+  // server-side check in POST /api/chat stays a backstop rather than the thing the user hits.
+  const remaining = MAX_CHAT_MESSAGE_LENGTH - messageText.length;
+  const showCounter = remaining <= MAX_CHAT_MESSAGE_LENGTH - COUNTER_THRESHOLD;
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -87,16 +90,27 @@ export function Composer({
       )}
 
       <form onSubmit={onSubmit} className="max-w-3xl mx-auto flex items-end gap-2">
-        <textarea
-          ref={textareaRef}
-          rows={1}
-          value={messageText}
-          onChange={(e) => onMessageChange(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="Ask a question about the codebase... (Enter to send, Shift+Enter for newline)"
-          disabled={isStreaming}
-          className="flex-1 resize-none bg-zinc-900/60 hover:bg-zinc-900 focus:bg-zinc-900 border border-zinc-800 hover:border-zinc-700/80 focus:border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none transition disabled:opacity-50 min-h-[46px] max-h-40 leading-5"
-        />
+        <div className="flex-1 min-w-0">
+          <textarea
+            rows={1}
+            value={messageText}
+            onChange={(e) => onMessageChange(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Ask a question about the codebase... (Enter to send, Shift+Enter for newline)"
+            disabled={isStreaming}
+            maxLength={MAX_CHAT_MESSAGE_LENGTH}
+            className="w-full resize-none [field-sizing:content] bg-zinc-900/60 hover:bg-zinc-900 focus:bg-zinc-900 border border-zinc-800 hover:border-zinc-700/80 focus:border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none transition disabled:opacity-50 min-h-[46px] max-h-40 leading-5 overflow-y-auto"
+          />
+          {showCounter && (
+            <div
+              className={`mt-1 text-right text-[11px] tabular-nums ${
+                remaining <= 100 ? "text-amber-400" : "text-zinc-500"
+              }`}
+            >
+              {remaining.toLocaleString()} chars left
+            </div>
+          )}
+        </div>
         <button
           type="submit"
           disabled={!messageText.trim() || isStreaming}

@@ -49,7 +49,9 @@ export function RepoList({
     }
   };
 
-  if (isLoading) {
+  // Only take over the panel on the first load. A background refetch must not replace the user's
+  // list with a spinner and then pop it back — that blink is what made the sidebar look cheap.
+  if (isLoading && repositories.length === 0) {
     return (
       <div className="p-4 text-center">
         <Loader2 className="h-5 w-5 animate-spin text-teal-400 mx-auto mb-2" />
@@ -120,9 +122,9 @@ export function RepoList({
               </div>
 
               <div className="flex items-center gap-1.5 shrink-0">
-                {status === "ready" && (
-                  <span className="h-2 w-2 rounded-full bg-emerald-500" title="Ready" />
-                )}
+                {/* No "ready" dot: it was on for essentially every indexed repo, so it carried no
+                    information. Indexing and failure still show a dot because those need watching,
+                    and both are also spelled out in the status line below. */}
                 {status === "processing" && (
                   <span className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" title="Indexing" />
                 )}
@@ -166,7 +168,7 @@ export function RepoList({
               </div>
             </div>
 
-            <div className="flex items-center justify-between text-[10px] text-zinc-500 font-mono mt-1">
+            <div className="flex items-center justify-between text-xs text-zinc-400 mt-1">
               <div className="flex items-center gap-1.5 truncate">
                 <span>{repo.defaultBranch || "main"}</span>
                 {repo.totalSizeBytes && formatBytes(repo.totalSizeBytes) && (
@@ -177,10 +179,10 @@ export function RepoList({
                 )}
               </div>
               {status === "failed" && (
-                <span className="text-red-400 text-[9px] font-sans shrink-0">Failed</span>
+                <span className="text-red-400 text-[11px] font-medium shrink-0">Failed</span>
               )}
               {status === "processing" && (
-                <span className="text-amber-400 text-[9px] font-sans shrink-0">Indexing</span>
+                <span className="text-amber-400 text-[11px] font-medium shrink-0">Indexing</span>
               )}
             </div>
 

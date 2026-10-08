@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { memo, useEffect, useRef } from "react";
 import { Bot, Loader2, AlertCircle } from "lucide-react";
 import { MessageBubble } from "./MessageBubble";
 import type { ChatMessage, Citation } from "./types";
@@ -14,7 +14,9 @@ interface MessageListProps {
   onRetryMessage?: (message: ChatMessage) => void;
 }
 
-export function MessageList({
+const PIN_THRESHOLD_PX = 80;
+
+function MessageListImpl({
   messages,
   isLoading,
   error,
@@ -22,21 +24,42 @@ export function MessageList({
   onSuggestionClick,
   onRetryMessage,
 }: MessageListProps) {
-  const bottomRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const isNearBottomRef = useRef(true);
+  const frameRef = useRef<number | null>(null);
 
   const handleScroll = () => {
-    if (!containerRef.current) return;
-    const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
-    isNearBottomRef.current = scrollHeight - scrollTop - clientHeight < 120;
+    const el = containerRef.current;
+    if (!el) return;
+    isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < PIN_THRESHOLD_PX;
   };
 
+  // Pin to the bottom by writing `scrollTop` on the list itself, once per frame.
+  //
+  // `scrollIntoView({behavior:"smooth"})` was the cause of the jumping: a stream replaces the
+  // messages array on every chunk, so a smooth-scroll animation restarted on each one and never
+  // settled, its target was computed before the content finished growing (so it landed past the
+  // last line), and it scrolls every scrollable ancestor rather than just this list. Chrome also
+  // freezes those animations in a backgrounded tab and resolves them against a stale target on
+  // refocus, which is the jump when you come back to the window.
   useEffect(() => {
-    if (isNearBottomRef.current) {
-      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-    }
+    if (!isNearBottomRef.current || frameRef.current !== null) return;
+    frameRef.current = requestAnimationFrame(() => {
+      frameRef.current = null;
+      const el = containerRef.current;
+      // Reading scrollHeight flushes layout, so this is the height after the newest chunk.
+      if (el) el.scrollTop = el.scrollHeight;
+    });
   }, [messages]);
+
+  // Cancels only on unmount. Cleaning up inside the effect above would cancel the pending frame on
+  // every chunk and defeat the coalescing, leaving the list unpinned while tokens stream in.
+  useEffect(
+    () => () => {
+      if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
+    },
+    [],
+  );
 
   if (isLoading) {
     return (
@@ -110,7 +133,9 @@ export function MessageList({
           onRetry={onRetryMessage ? () => onRetryMessage(msg) : undefined}
         />
       ))}
-      <div ref={bottomRef} />
     </div>
   );
 }
+
+// memo: composer keystrokes change only messageText, which none of these read.
+export const MessageList = memo(MessageListImpl);

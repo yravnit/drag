@@ -12,4 +12,14 @@ describe("MermaidBlock controls", () => {
     expect(html).toContain("Copy to clipboard");
     expect(html).not.toContain("HTTP Requests");
   });
+
+  it("shows a loader instead of the source while the diagram is still streaming", () => {
+    const html = renderToStaticMarkup(
+      <MermaidBlock chart="graph LR\n  A[Front" id="chart-2" streaming />,
+    );
+
+    expect(html).toContain("Waiting for diagram");
+    expect(html).toContain("animate-spin");
+    expect(html).not.toContain("A[Front");
+  });
 });

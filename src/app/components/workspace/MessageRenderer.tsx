@@ -127,6 +127,8 @@ export function MessageRenderer({
   const citationList = useMemo(() => citations ?? [], [citations]);
   const hasAnswer = Boolean(answer && answer.trim().length > 0);
 
+  
+
   // Rebuilt only when the citations or the click handler change. Recreating it on every render
   // handed react-markdown a new component type each time, remounting the whole subtree.
   const components = useMemo(
@@ -152,7 +154,13 @@ export function MessageRenderer({
         if (language === "mermaid") {
           // Derived from the diagram's own source, so it is stable across re-renders and still
           // distinct per diagram and per message.
-          return <MermaidBlock chart={codeString} id={chartDomId(messageId, codeString)} />;
+          return (
+            <MermaidBlock
+              chart={codeString}
+              id={chartDomId(messageId, codeString)}
+              streaming={isStreaming}
+            />
+          );
         }
 
         return (
@@ -272,7 +280,9 @@ export function MessageRenderer({
         );
       },
     }),
-    [citationList, onCitationClick, messageId],
+    // isStreaming is in the deps because `code` closes over it. It only flips true at the start of
+    // a turn and false at its end, so the worst case is one extra subtree remount per message.
+    [citationList, onCitationClick, messageId, isStreaming],
   );
 
   if (!content) return null;

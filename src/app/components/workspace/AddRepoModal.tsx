@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { X, Loader2, AlertTriangle, Globe, GitBranch } from "lucide-react";
 import { GitHubRepoPicker } from "./GitHubRepoPicker";
 import { formatLimit } from "./formatters";
@@ -20,7 +20,7 @@ interface AddRepoModalProps {
   entitlements?: PlanUsageData["entitlements"] | null;
 }
 
-export function AddRepoModal({
+function AddRepoModalImpl({
   isOpen,
   onClose,
   onAddRepo,
@@ -370,3 +370,6 @@ export function AddRepoModal({
     </div>
   );
 }
+
+// memo: composer keystrokes change only messageText, which none of these read.
+export const AddRepoModal = memo(AddRepoModalImpl);

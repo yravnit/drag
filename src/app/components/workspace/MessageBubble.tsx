@@ -1,8 +1,13 @@
 "use client";
 
+import { useState } from "react";
 import { Bot, User, AlertCircle, RotateCcw, FileCode } from "lucide-react";
 import { MessageRenderer } from "./MessageRenderer";
+import { CopyCodeButton } from "./CopyCodeButton";
 import type { ChatMessage, Citation } from "./types";
+
+/** Past this length a user prompt is clamped and gets a Show more toggle. */
+const COLLAPSE_OVER_CHARS = 280;
 
 interface MessageBubbleProps {
   message: ChatMessage;
@@ -15,6 +20,10 @@ export function MessageBubble({ message, onCitationClick, onRetry }: MessageBubb
   const isFailed = message.status === "failed";
   const isStreaming = message.status === "streaming";
   const citations = isUser ? [] : (message.citations ?? []);
+  const [expanded, setExpanded] = useState(false);
+
+  const isLong = isUser && message.content.length > COLLAPSE_OVER_CHARS;
+  const clamped = isLong && !expanded;
 
   return (
     <div className={`flex gap-3 sm:gap-4 ${isUser ? "justify-end" : "justify-start"}`}>
@@ -36,7 +45,28 @@ export function MessageBubble({ message, onCitationClick, onRetry }: MessageBubb
         }`}
       >
         {isUser ? (
-          <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+          <>
+            {/* `line-clamp-6` must stay a literal: Tailwind scans source text for whole class
+                names, so an interpolated `line-clamp-${n}` is never generated. Clamping in CSS
+                also means no measuring pass, which is what a JS height check would cost on every
+                streamed message. */}
+            <p className={`text-sm whitespace-pre-wrap ${clamped ? "line-clamp-6" : ""}`}>
+              {message.content}
+            </p>
+            <div className="mt-1.5 flex items-center gap-1 -mb-1">
+              <CopyCodeButton text={message.content} />
+              {isLong && (
+                <button
+                  type="button"
+                  onClick={() => setExpanded((v) => !v)}
+                  aria-expanded={expanded}
+                  className="px-2 py-0.5 rounded text-[11px] text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition active:scale-95 cursor-pointer"
+                >
+                  {expanded ? "Show less" : "Show more"}
+                </button>
+              )}
+            </div>
+          </>
         ) : (
           <>
             {isFailed && (

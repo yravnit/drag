@@ -58,6 +58,13 @@ export interface StatusTracker {
 
 export type ResponseMode = "precise" | "detailed" | "explain_simply";
 
+/**
+ * Maximum characters in one user prompt. Enforced on the textarea and again in `POST /api/chat`,
+ * so a client that skips the input attribute still cannot overrun it. Lives here because
+ * `types.ts` imports nothing and is already shared by the client and the route.
+ */
+export const MAX_CHAT_MESSAGE_LENGTH = 4000;
+
 /** Conversation row as serialized by GET /api/conversations. */
 export interface ConversationThread {
   id: string;

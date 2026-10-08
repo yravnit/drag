@@ -146,9 +146,8 @@ export function ChatWindow({
               <h2 className="text-sm font-bold text-white truncate max-w-[200px] sm:max-w-md">
                 {selectedRepo.owner}/{selectedRepo.name}
               </h2>
-              {currentStatus === "ready" && (
-                <span className="h-2 w-2 rounded-full bg-emerald-500" title="Ready" />
-              )}
+              {/* No "ready" dot, same as the repo list: green on a healthy repo was decoration,
+                  not information. Indexing and failure still show one because they need watching. */}
               {currentStatus === "processing" && (
                 <span className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" title="Indexing" />
               )}
@@ -156,14 +155,16 @@ export function ChatWindow({
                 <span className="h-2 w-2 rounded-full bg-red-500" title="Failed" />
               )}
             </div>
-            <div className="flex items-center gap-1.5 text-[10px] text-zinc-500 font-mono mt-0.5">
-              {branch && <span className="text-zinc-400">{branch}</span>}
+            <div className="flex items-center gap-1.5 text-xs text-zinc-400 mt-1">
+              {branch && <span>{branch}</span>}
               {language && <span>· {language}</span>}
-              {commitSha && <span>· {commitSha}</span>}
-              {filesCount !== undefined && filesCount > 0 && (
+              {commitSha && (
                 <span>
-                  · {filesCount} files indexed{chunksCount ? ` · ${chunksCount} chunks` : ""}
+                  · <span className="font-mono">{commitSha}</span>
                 </span>
+              )}
+              {filesCount !== undefined && filesCount > 0 && (
+                <span>· {filesCount} files indexed</span>
               )}
               {storageDisplay && <span>· {storageDisplay}</span>}
               {relativeSyncTime && <span>· {relativeSyncTime}</span>}
@@ -369,7 +370,7 @@ export function ChatWindow({
                 </div>
               </div>
 
-              <div className="pt-2 text-center text-[10px] text-zinc-500 font-mono">
+              <div className="pt-2 text-center text-xs text-zinc-400">
                 {stage === "preparing"
                   ? "Preparing repository structure..."
                   : stage === "indexing"

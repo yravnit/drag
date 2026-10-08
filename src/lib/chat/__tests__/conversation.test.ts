@@ -304,7 +304,9 @@ describe("answerConversation", () => {
     expect(result).toEqual({ ok: false, status: 500, error: "embedding boom" });
     expect(setup.inserts).toHaveLength(2);
 
-    const failedUpdate = setup.updates[setup.updates.length - 1];
+    // Selected by status, not position: the concurrent title write is pushed to the same list and
+    // can land after this failure path returns.
+    const failedUpdate = setup.updates.find((u) => u.set.status === "failed")!;
     expect(failedUpdate.set.status).toBe("failed");
     expect(failedUpdate.set.content).toBe(
       "Embedding generation failed: embedding boom",
@@ -331,7 +333,9 @@ describe("answerConversation", () => {
     expect(result).toEqual({ ok: false, status: 500, error: "retrieval exploded" });
     expect(setup.inserts).toHaveLength(2);
 
-    const failedUpdate = setup.updates[setup.updates.length - 1];
+    // Selected by status, not position: the concurrent title write is pushed to the same list and
+    // can land after this failure path returns.
+    const failedUpdate = setup.updates.find((u) => u.set.status === "failed")!;
     expect(failedUpdate.set.status).toBe("failed");
     expect(failedUpdate.set.content).toContain("retrieval exploded");
   });
@@ -356,7 +360,9 @@ describe("answerConversation", () => {
     expect(result).toEqual({ ok: false, status: 500, error: "stream initialization exploded" });
     expect(setup.inserts).toHaveLength(2);
 
-    const failedUpdate = setup.updates[setup.updates.length - 1];
+    // Selected by status, not position: the concurrent title write is pushed to the same list and
+    // can land after this failure path returns.
+    const failedUpdate = setup.updates.find((u) => u.set.status === "failed")!;
     expect(failedUpdate.set.status).toBe("failed");
     expect(failedUpdate.set.content).toContain("stream initialization exploded");
   });
@@ -430,7 +436,11 @@ describe("answerConversation", () => {
           ],
           {
             streamLLM: async (messages) => {
-              capturedSystem = messages[0].content;
+              // A brand new thread also issues a second, concurrent call to name itself, so pick
+              // the answer's prompt by content rather than by call order.
+              if (messages[0].content.includes("expert AI coding assistant")) {
+                capturedSystem = messages[0].content;
+              }
               return (async function* () {
                 yield "ok";
               })();

@@ -9,6 +9,7 @@ import { CopyCodeButton } from "./CopyCodeButton";
 interface MermaidBlockProps {
   chart: string;
   id: string;
+  streaming?: boolean;
 }
 
 /**
@@ -46,7 +47,7 @@ const DEFAULT_ZOOM = 2;
  * Renders the diagram by default and can toggle to the Mermaid source; a chart that
  * fails to compile falls back to the source view plus the parser message.
  */
-export function MermaidBlock({ chart, id }: MermaidBlockProps) {
+export function MermaidBlock({ chart, id, streaming = false }: MermaidBlockProps) {
   const [svg, setSvg] = useState<string>("");
   const [naturalWidth, setNaturalWidth] = useState(0);
   const [error, setError] = useState<string>("");
@@ -54,6 +55,10 @@ export function MermaidBlock({ chart, id }: MermaidBlockProps) {
   const [zoomIdx, setZoomIdx] = useState(DEFAULT_ZOOM);
 
   useEffect(() => {
+    // A half-streamed diagram is not valid Mermaid, so rendering it just flashes a broken
+    // diagram and then the source plus a parse error. Wait for the closing fence instead.
+    if (streaming) return;
+
     let active = true;
     setError("");
     import("mermaid")
@@ -92,16 +97,18 @@ export function MermaidBlock({ chart, id }: MermaidBlockProps) {
     return () => {
       active = false;
     };
-  }, [chart, id]);
+  }, [chart, id, streaming]);
 
   const showDiagram = !showCode && !error;
   const zoom = ZOOMS[zoomIdx];
+  const pending = streaming || !svg;
 
   return (
     <div className="my-3 rounded-lg overflow-hidden border border-zinc-800">
       <div className="flex items-center gap-1 px-3 py-1.5 bg-zinc-900 text-xs text-zinc-400 font-mono border-b border-zinc-800">
         <span className="mr-auto">mermaid</span>
-        {showDiagram && (
+        {pending && <span className="text-zinc-500">rendering…</span>}
+        {showDiagram && !pending && (
           <>
             <ZoomButton
               label="Zoom out"
@@ -152,8 +159,16 @@ export function MermaidBlock({ chart, id }: MermaidBlockProps) {
             />
           </div>
         ) : (
-          <div className="flex items-center justify-center p-6 bg-[#0a0a0a]">
+          <div
+            className="flex flex-col items-center justify-center gap-2 p-6 min-h-[10rem] bg-[#0a0a0a]"
+            role="status"
+            aria-live="polite"
+            aria-label={streaming ? "Waiting for diagram" : "Rendering diagram"}
+          >
             <Loader2 className="h-6 w-6 animate-spin text-zinc-500" />
+            <span className="text-[11px] font-mono text-zinc-600">
+              {streaming ? "waiting for diagram…" : "rendering…"}
+            </span>
           </div>
         )
       ) : (

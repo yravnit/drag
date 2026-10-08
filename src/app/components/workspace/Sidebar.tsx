@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, useEffect } from "react";
+import React, { memo, useState, useRef, useEffect } from "react";
 import Image from "next/image";
 import { FolderGit2, Plus, LogOut, X, Search } from "lucide-react";
 import { RepoList } from "./RepoList";
@@ -39,7 +39,7 @@ interface SidebarProps {
   onOpenPlanModal?: () => void;
 }
 
-export function Sidebar({
+function SidebarImpl({
   sessionUser,
   repositories,
   selectedRepo,
@@ -101,8 +101,8 @@ export function Sidebar({
             <FolderGit2 className="h-5 w-5 text-teal-400" />
           </div>
           <div>
-            <span className="font-display font-bold text-sm tracking-wide text-white">DRAG Workspace</span>
-            <div className="text-[10px] text-zinc-500 font-semibold uppercase tracking-wider">v1.1 · Beta</div>
+            <span className="text-sm font-bold tracking-wide text-white">DRAG Workspace</span>
+            <div className="text-[11px] text-zinc-400 font-semibold uppercase tracking-wider">v1.1 · Beta</div>
           </div>
         </div>
 
@@ -130,10 +130,10 @@ export function Sidebar({
         {/* Repositories section */}
         <div>
           <div className="px-2 flex items-center justify-between mb-2">
-            <h3 className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">
+            <h3 className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">
               Repositories
             </h3>
-            <span className="text-[10px] text-zinc-600 font-mono">
+            <span className="text-[11px] text-zinc-400 font-mono">
               {filteredRepos.length}
             </span>
           </div>
@@ -196,13 +196,13 @@ export function Sidebar({
         <div className="p-3 border-t border-zinc-900 bg-zinc-950/20">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-1.5">
-              <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">
+              <span className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">
                 Plan:
               </span>
               <span className="text-xs font-bold text-white capitalize">
                 {planUsage.plan}
               </span>
-              <span className="text-[10px] text-zinc-500 font-mono">
+              <span className="text-[11px] text-zinc-400 font-mono">
                 {planUsage.pricing.displayPrice}
               </span>
             </div>
@@ -268,7 +268,7 @@ export function Sidebar({
           )}
           <div className="min-w-0">
             <div className="text-xs font-semibold truncate text-zinc-200">{sessionUser.name}</div>
-            <div className="text-[10px] text-zinc-500 truncate">{sessionUser.email}</div>
+            <div className="text-[11px] text-zinc-400 truncate">{sessionUser.email}</div>
             <div className="flex items-center gap-1.5 mt-0.5">
               <span
                 className={`text-[9px] font-semibold px-1.5 py-0.5 rounded ${
@@ -323,3 +323,6 @@ export function Sidebar({
     </>
   );
 }
+
+// memo: composer keystrokes change only messageText, which none of these read.
+export const Sidebar = memo(SidebarImpl);

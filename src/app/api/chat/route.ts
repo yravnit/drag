@@ -5,6 +5,7 @@ import {
   answerConversation,
   defaultConversationChatDeps,
 } from "@/lib/chat/conversation";
+import { MAX_CHAT_MESSAGE_LENGTH } from "@/app/components/workspace/types";
 import { checkRateLimit } from "@/lib/rateLimit/rateLimiter";
 import {
   getUserEntitlements,
@@ -13,7 +14,6 @@ import {
 } from "@/lib/plans/entitlements";
 
 
-const MAX_CHAT_MESSAGE_LENGTH = 4000;
 const RATE_LIMIT_ACTION = "chat";
 const RATE_LIMIT_MAX_REQUESTS = 30;
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;

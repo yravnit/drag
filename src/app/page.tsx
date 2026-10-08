@@ -222,13 +222,19 @@ export default function Home() {
     }
   }, []);
 
+  // Keyed on the user id, not the `session` object. Better Auth refetches the session when the
+  // window regains focus and hands back a fresh object identity for the same signed-in user, which
+  // re-ran this effect and flipped the sidebar to its loading state every time the user alt-tabbed
+  // back in. The id is the only part that should trigger a load.
+  const sessionUserId = session?.user?.id;
+
   // Load user repositories and plan usage on session ready
   useEffect(() => {
-    if (session) {
+    if (sessionUserId) {
       loadUserRepos();
       loadPlanUsage();
     }
-  }, [session, loadUserRepos, loadPlanUsage]);
+  }, [sessionUserId, loadUserRepos, loadPlanUsage]);
 
   // Load conversations when selected repository changes
   useEffect(() => {
@@ -589,6 +595,13 @@ export default function Home() {
 
       // Reload the thread this stream belongs to, not whichever one is displayed now.
       await loadMessages(conversationId, requestId);
+      // The server names a brand new thread from its first question and awaits that write before
+      // closing the stream, so the title is already committed by the time this reader sees `done`
+      // and needs no settling delay. Scoped to this repo, and skipped once the user has moved on,
+      // so a slow title can't repaint a thread the user already left.
+      if (selectedRepo && conversationId === selectedConversation?.id) {
+        loadConversations(selectedRepo.id);
+      }
       loadPlanUsage();
     } catch (err) {
       const message = err instanceof Error ? err.message : "";
@@ -607,7 +620,8 @@ export default function Home() {
     }
   };
 
-  const handleRetryMessage = async (failedMsg: ChatMessage) => {
+  const handleRetryMessage = useCallback(
+    async (failedMsg: ChatMessage) => {
     if (!selectedConversation || isStreaming) return;
 
     // Find the preceding user message in messagesList
@@ -719,11 +733,18 @@ export default function Home() {
     } finally {
       setIsStreaming(false);
     }
-  };
-
-  const handleCitationClick = (citation: Citation) => {
-    setCitationDetail(citation);
-  };
+  },
+  [
+    selectedConversation,
+    isStreaming,
+    messagesList,
+    selectedModel,
+    responseMode,
+    nextMessagesRequestId,
+    loadMessages,
+    loadPlanUsage,
+  ],
+  );
 
   const handleSignIn = async () => {
     await signIn.social({
@@ -745,6 +766,40 @@ export default function Home() {
     await signOut();
   };
 
+  // Stable identities for the memoized workspace subtrees. `messageText` is component state, so
+  // every keystroke re-renders this whole tree; without these the inline arrows below are new
+  // functions each render, `memo` never hits, and the sidebar, every markdown message bubble and
+  // all three modals re-render per character.
+  const handleCitationClick = useCallback((citation: Citation) => {
+    setCitationDetail(citation);
+  }, []);
+
+  const handleSuggestionClick = useCallback((prompt: string) => {
+    setMessageText(prompt);
+  }, []);
+
+  const handleCloseCitation = useCallback(() => setCitationDetail(null), []);
+
+  const handleDeleteRepoClick = useCallback(
+    (repoId: string) => {
+      setRepoDeleteError(null);
+      setPendingRepoDelete({
+        id: repoId,
+        label: `${repositoriesList.find((r) => r.id === repoId)?.owner ?? ""}/${repositoriesList.find((r) => r.id === repoId)?.name ?? "repository"}`,
+      });
+    },
+    [repositoriesList],
+  );
+
+  const handleOpenAddModal = useCallback(() => setIsAddingRepo(true), []);
+  const handleCloseAddModal = useCallback(() => setIsAddingRepo(false), []);
+  const handleOpenPlanModal = useCallback(() => setIsPlanModalOpen(true), []);
+  const handleClosePlanModal = useCallback(() => setIsPlanModalOpen(false), []);
+  const handleLoadMoreGithub = useCallback(
+    () => loadGithubRepos(githubPage + 1),
+    [githubPage, loadGithubRepos],
+  );
+
   if (isPending) {
     return (
       <div className="flex h-screen w-full items-center justify-center bg-[#050505]">
@@ -764,7 +819,7 @@ export default function Home() {
           <div className="mx-auto mb-8 flex h-16 w-16 items-center justify-center rounded-2xl bg-zinc-900 border border-zinc-800 shadow-xl">
             <FolderGit2 className="h-8 w-8 text-teal-400" />
           </div>
-          <h1 className="text-4xl font-extrabold tracking-tight text-white sm:text-5xl">
+          <h1 className="font-display text-4xl font-bold tracking-tight text-white sm:text-5xl">
             Meet <span className="bg-gradient-to-r from-teal-400 to-blue-500 bg-clip-text text-transparent">DRAG</span>
           </h1>
           <p className="mt-4 text-base text-zinc-400 leading-relaxed">
@@ -885,18 +940,12 @@ export default function Home() {
       chatError={chatError}
       selectedCitation={citationDetail}
       onSelectRepo={setSelectedRepo}
-      onDeleteRepo={(repoId) => {
-        setRepoDeleteError(null);
-        setPendingRepoDelete({
-          id: repoId,
-          label: `${repositoriesList.find((r) => r.id === repoId)?.owner ?? ""}/${repositoriesList.find((r) => r.id === repoId)?.name ?? "repository"}`,
-        });
-      }}
+      onDeleteRepo={handleDeleteRepoClick}
       onRetryRepo={handleRetryRepo}
-      onOpenAddModal={() => setIsAddingRepo(true)}
-      onCloseAddModal={() => setIsAddingRepo(false)}
+      onOpenAddModal={handleOpenAddModal}
+      onCloseAddModal={handleCloseAddModal}
       onAddRepo={handleAddRepo}
-      onLoadMoreGithub={() => loadGithubRepos(githubPage + 1)}
+      onLoadMoreGithub={handleLoadMoreGithub}
       onSelectConversation={setSelectedConversation}
       onCreateConversation={handleCreateConversation}
       onRenameConversation={handleRenameConversation}
@@ -904,16 +953,16 @@ export default function Home() {
       onMessageChange={setMessageText}
       onSendMessage={handleSendMessage}
       onCitationClick={handleCitationClick}
-      onCloseCitation={() => setCitationDetail(null)}
+      onCloseCitation={handleCloseCitation}
       onSignOut={handleSignOut}
-      onSuggestionClick={(prompt) => setMessageText(prompt)}
+      onSuggestionClick={handleSuggestionClick}
       onRetryMessage={handleRetryMessage}
       accessMode={userAccessMode}
       onUpgradeAccess={handleUpgradeAccess}
       planUsage={planUsage}
       isPlanModalOpen={isPlanModalOpen}
-      onOpenPlanModal={() => setIsPlanModalOpen(true)}
-      onClosePlanModal={() => setIsPlanModalOpen(false)}
+      onOpenPlanModal={handleOpenPlanModal}
+      onClosePlanModal={handleClosePlanModal}
       selectedModel={selectedModel}
       onSelectModel={setSelectedModel}
       responseMode={responseMode}
