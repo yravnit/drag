@@ -481,15 +481,18 @@ export default function Home() {
   };
 
   const handleDeleteRepo = async (repoId: string) => {
+    if (statusTracker?.id === repoId) {
+      setStatusTracker(null);
+    }
+    if (selectedRepo?.id === repoId) {
+      setSelectedRepo(null);
+    }
     const res = await fetch(`/api/repos/${repoId}`, { method: "DELETE" });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
       throw new Error(data.error || "Could not remove this repository.");
     }
     setPendingRepoDelete(null);
-    if (selectedRepo?.id === repoId) {
-      setSelectedRepo(null);
-    }
     await Promise.all([loadUserRepos(), loadPlanUsage()]);
   };
 
@@ -606,9 +609,6 @@ export default function Home() {
           : (data.error || "Generation failed");
 
         setChatError(displayErr);
-        // Reload from the server instead of leaving a local temp bubble behind. A temp id is not a
-        // UUID, so retrying it later would send an unparseable value as retryMessageId and fail
-        // before generation ever starts.
         if (requestId === messagesRequestIdRef.current) {
           setMessagesList((prev) =>
             prev.map((msg) =>
@@ -617,7 +617,6 @@ export default function Home() {
                 : msg,
             ),
           );
-          await loadMessages(conversationId, requestId);
         }
         setIsStreaming(false);
         return;

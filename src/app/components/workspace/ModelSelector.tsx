@@ -102,7 +102,7 @@ export function ModelSelector({
         onClick={() => setIsOpen((prev) => !prev)}
         aria-expanded={isOpen}
         title="Select AI Chat Model"
-        className="inline-flex h-8 max-w-[140px] items-center gap-1.5 rounded-control border border-line bg-surface px-2.5 text-xs font-medium text-ink-2 transition-[border-color,color] duration-150 hover:border-line-2 hover:text-ink active:scale-[0.97] sm:max-w-[200px]"
+        className="inline-flex h-8 max-w-[140px] items-center gap-1.5 rounded-control border border-line bg-surface px-2.5 text-xs font-medium text-ink-2 transition-[border-color,color,transform] duration-150 ease-out hover:border-line-2 hover:text-ink active:scale-[0.985] active:duration-75 sm:max-w-[200px]"
       >
         <Cpu className="size-3.5 shrink-0 text-accent-ink" aria-hidden />
         <span className="truncate">{displayLabel}</span>

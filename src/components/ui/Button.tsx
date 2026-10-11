@@ -34,8 +34,8 @@ export function Button({
       type={type}
       className={cn(
         "inline-flex items-center justify-center gap-2 rounded-[6px] font-semibold whitespace-nowrap",
-        "transition-[background-color,border-color,color,box-shadow] duration-150 ease-out",
-        "active:scale-[0.99] disabled:pointer-events-none disabled:opacity-50",
+        "transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-out",
+        "active:scale-[0.985] active:duration-75 disabled:pointer-events-none disabled:opacity-50",
         VARIANTS[variant],
         SIZES[size],
         className,

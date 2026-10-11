@@ -38,6 +38,8 @@ export async function GET(
         isPrivate: repositories.isPrivate,
         embeddingProvider: repositories.embeddingProvider,
         embeddingModel: repositories.embeddingModel,
+        updatedAt: repositories.updatedAt,
+        embeddingLeaseExpiresAt: repositories.embeddingLeaseExpiresAt,
       })
       .from(repositories)
       .where(eq(repositories.id, repoId))
@@ -87,7 +89,37 @@ export async function GET(
       // Graceful fallback if testing without mock repository_files/chunks table
     }
 
-    const rawStatus = repo.embeddingStatus || "processing";
+    const now = new Date();
+    const STALE_INGEST_MS = 15 * 60 * 1000;
+    const isLeaseExpired = repo.embeddingLeaseExpiresAt
+      ? new Date(repo.embeddingLeaseExpiresAt).getTime() < now.getTime()
+      : false;
+    const isUpdateStale = repo.updatedAt
+      ? now.getTime() - new Date(repo.updatedAt).getTime() > STALE_INGEST_MS
+      : false;
+
+    let rawStatus = repo.embeddingStatus || "processing";
+    let isStale = false;
+
+    if (rawStatus === "processing" && (isLeaseExpired || isUpdateStale)) {
+      rawStatus = "failed";
+      isStale = true;
+      try {
+        if (db.update) {
+          await db
+            .update(repositories)
+            .set({
+              embeddingStatus: "failed",
+              embeddingLeaseExpiresAt: null,
+              updatedAt: now,
+            })
+            .where(eq(repositories.id, repoId));
+        }
+      } catch (err) {
+        console.error("Failed to mark stale repository as failed:", err);
+      }
+    }
+
     let stage: "preparing" | "indexing" | "embedding" | "ready" | "failed";
     if (rawStatus === "failed") {
       stage = "failed";
@@ -112,6 +144,7 @@ export async function GET(
       id: repo.id,
       embeddingStatus: rawStatus,
       stage,
+      isStale,
       indexedAt: repo.indexedAt,
       defaultBranch: repo.defaultBranch,
       primaryLanguage: repo.primaryLanguage,

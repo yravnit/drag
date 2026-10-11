@@ -339,7 +339,7 @@ export function ConversationList({
                   }
                 }}
                 className={cn(
-                  "group relative flex cursor-pointer items-center justify-between gap-1 rounded-control border border-transparent px-2 py-1.5 transition-[background-color,color,border-color] duration-150 active:scale-[0.99]",
+                  "group relative flex cursor-pointer items-center justify-between gap-1 rounded-control border border-transparent px-2 py-1.5 transition-[background-color,color,border-color,transform] duration-150 ease-out active:scale-[0.99] active:duration-75",
                   isSelected
                     ? "bg-rail-active font-semibold text-rail-active-ink"
                     : "text-ink-3 hover:bg-rail-hover hover:text-ink",

@@ -178,6 +178,22 @@ describe("answerConversation", () => {
     expect(setup.inserts).toHaveLength(0);
   });
 
+  it("returns 400 when repository is still indexing or in a failed state", async () => {
+    const setup = baseSetup([
+      Promise.resolve([{ id: "conv-1", userId: "user-1", repositoryId: "repo-1" }]),
+      Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name", embeddingStatus: "processing" }]),
+    ]);
+
+    const result = await answerConversation(setup.deps, setup.input);
+
+    expect(result).toEqual({
+      ok: false,
+      status: 400,
+      error: "Repository is still indexing. Please wait until indexing completes before asking questions.",
+    });
+    expect(setup.inserts).toHaveLength(0);
+  });
+
   it("returns 403 when access verification reports no access on GitHub", async () => {
     // verifyRepositoryAccess reads the access cache through the same database
     // handle; a fresh row with hasAccess=false short-circuits without any

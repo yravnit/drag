@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { AlertCircle, Check, Loader2, Plus, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { MessageList } from "./MessageList";
@@ -131,6 +131,24 @@ export function ChatWindow({
 
   const stageIndex = stage === "preparing" ? 0 : stage === "indexing" ? 1 : 2;
 
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+
+  useEffect(() => {
+    if (stage === "ready" || stage === "failed") {
+      setElapsedSeconds(0);
+      return;
+    }
+    const timer = setInterval(() => {
+      setElapsedSeconds((prev) => prev + 1);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [stage]);
+
+  const formattedElapsed =
+    elapsedSeconds >= 60
+      ? `${Math.floor(elapsedSeconds / 60)}m ${elapsedSeconds % 60}s`
+      : `${elapsedSeconds}s`;
+
   const stageSteps: StageStep[] = [
     {
       label: "Acquire",
@@ -247,13 +265,37 @@ export function ChatWindow({
                 ))}
               </ol>
 
-              <p className="border-t border-chat-line pt-3 text-center text-[11px] text-chat-ink-3">
-                {stage === "preparing"
-                  ? "Preparing repository structure..."
-                  : stage === "indexing"
-                    ? "Parsing AST and chunking files..."
-                    : "Vectorizing code chunks..."}
-              </p>
+              <div className="border-t border-chat-line pt-3 text-center space-y-2">
+                <p className="text-[11px] text-chat-ink-3">
+                  {stage === "preparing"
+                    ? "Preparing repository structure..."
+                    : stage === "indexing"
+                      ? "Parsing AST and chunking files..."
+                      : "Vectorizing code chunks..."}{" "}
+                  (elapsed: {formattedElapsed})
+                </p>
+                {elapsedSeconds > 180 && (
+                  <p className="text-[11px] text-chat-ink-3 leading-relaxed">
+                    Indexing is taking longer than expected. Large repositories can take a few minutes, or you can restart the job.
+                  </p>
+                )}
+                {elapsedSeconds > 60 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleRetry}
+                    disabled={retrying}
+                    className="text-xs"
+                  >
+                    {retrying ? (
+                      <Loader2 className="size-3 animate-spin" aria-hidden />
+                    ) : (
+                      <RotateCcw className="size-3" aria-hidden />
+                    )}
+                    {retrying ? "Restarting..." : "Restart indexing"}
+                  </Button>
+                )}
+              </div>
             </div>
           ) : (
             <div className="max-w-md space-y-4">
@@ -282,6 +324,37 @@ export function ChatWindow({
         </div>
       ) : (
         <>
+          {stage !== "ready" && (
+            <div className="flex items-center justify-between border-b border-chat-line bg-surface px-4 py-2 text-xs text-chat-ink-2">
+              <div className="flex items-center gap-2">
+                {stage === "failed" ? (
+                  <AlertCircle className="size-4 shrink-0 text-danger" aria-hidden />
+                ) : (
+                  <Loader2 className="size-4 shrink-0 animate-spin text-accent-ink" aria-hidden />
+                )}
+                <span>
+                  {stage === "failed"
+                    ? "Repository indexing failed. Please restart indexing."
+                    : `Repository is still indexing (${stage}, elapsed: ${formattedElapsed}). Chat will unlock once ready.`}
+                </span>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleRetry}
+                disabled={retrying}
+                className="text-xs"
+              >
+                {retrying ? (
+                  <Loader2 className="size-3 animate-spin" aria-hidden />
+                ) : (
+                  <RotateCcw className="size-3" aria-hidden />
+                )}
+                {retrying ? "Restarting..." : "Restart"}
+              </Button>
+            </div>
+          )}
+
           <MessageList
             messages={messages}
             isLoading={messagesLoading}
@@ -305,6 +378,12 @@ export function ChatWindow({
             onSelectModel={onSelectModel}
             manuallyPicked={manuallyPickedModel}
             onManualPick={onManualPickModel}
+            disabled={stage !== "ready"}
+            disabledReason={
+              stage === "failed"
+                ? "Repository indexing failed. Please restart indexing to chat."
+                : `Repository is still indexing (${stage}). Chat will unlock once ready.`
+            }
           />
         </>
       )}

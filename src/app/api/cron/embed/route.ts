@@ -1,6 +1,9 @@
 import { start } from "workflow/api";
 import { db } from "@/db/db";
-import { findRepositoriesWithPendingEmbeddings } from "@/lib/leases/repositoryLeases";
+import {
+  findRepositoriesWithPendingEmbeddings,
+  markStaleProcessingRepositoriesAsFailed,
+} from "@/lib/leases/repositoryLeases";
 import { embedRepository } from "@/workflows/embed";
 import { isCronAuthorized } from "@/lib/cron/cronAuth";
 import { NextResponse } from "next/server";
@@ -18,6 +21,8 @@ export async function GET(request: Request) {
   }
 
   try {
+    await markStaleProcessingRepositoriesAsFailed(db);
+
     const BATCH_SIZE = 5; // Keep processing bounded
     const eligible = await findRepositoriesWithPendingEmbeddings(db, BATCH_SIZE);
 

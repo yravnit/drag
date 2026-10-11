@@ -213,7 +213,7 @@ function SidebarImpl({
           <button
             type="button"
             onClick={onOpenPlanModal}
-            className="flex w-full items-center justify-between rounded-control px-2 py-1.5 text-[11px] font-semibold text-accent-ink transition-colors duration-150 hover:bg-rail-hover active:scale-[0.98]"
+            className="flex w-full items-center justify-between rounded-control px-2 py-1.5 text-[11px] font-semibold text-accent-ink transition-[background-color,color,transform] duration-150 ease-out hover:bg-rail-hover active:scale-[0.985] active:duration-75"
           >
             <span>Plan &amp; usage</span>
             <span className="font-mono text-[10px] text-ink-4">Details →</span>

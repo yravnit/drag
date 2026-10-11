@@ -50,7 +50,7 @@ export function defaultConversationChatDeps(): ConversationChatDeps {
 }
 
 export type ConversationChatResult =
-  | { ok: false; status: 404 | 403 | 409 | 500; error: string }
+  | { ok: false; status: 400 | 403 | 404 | 409 | 500; error: string }
   | { ok: true; stream: ReadableStream };
 
 export async function answerConversation(
@@ -90,6 +90,18 @@ export async function answerConversation(
 
   if (!repo) {
     return { ok: false, status: 404, error: "Repository not found" };
+  }
+
+  if (repo.embeddingStatus && repo.embeddingStatus !== "ready") {
+    const detail =
+      repo.embeddingStatus === "failed"
+        ? "Repository indexing failed. Please retry indexing before asking questions."
+        : "Repository is still indexing. Please wait until indexing completes before asking questions.";
+    return {
+      ok: false,
+      status: 400,
+      error: detail,
+    };
   }
 
   // 2. Verify access (Phase 3.4)

@@ -65,6 +65,8 @@ interface ComposerProps {
   onManualPick?: () => void;
   responseMode?: ResponseMode;
   onResponseModeChange?: (mode: ResponseMode) => void;
+  disabled?: boolean;
+  disabledReason?: string;
 }
 
 export function Composer({
@@ -77,6 +79,8 @@ export function Composer({
   onSelectModel,
   manuallyPicked,
   onManualPick,
+  disabled = false,
+  disabledReason,
 }: ComposerProps) {
   // The textarea grows natively via `field-sizing: content`, clamped by `min-h`/`max-h`. The old
   // resize effect set `style.height = "auto"` and read `scrollHeight` on every keystroke, forcing
@@ -159,10 +163,15 @@ export function Composer({
     recognition.start();
 
     return () => {
+      recordingRef.current = false;
       recognition.onresult = null;
       recognition.onerror = null;
       recognition.onend = null;
-      recognition.abort();
+      try {
+        recognition.abort();
+      } catch {
+        // Ignore abort exceptions on unmounted instance
+      }
       recognitionRef.current = null;
     };
   }, [recording]);
@@ -217,9 +226,13 @@ export function Composer({
             value={messageText}
             onChange={(e) => onMessageChange(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask a question about the codebase... (Enter to send, Shift+Enter for newline)"
+            placeholder={
+              disabled
+                ? (disabledReason || "Repository is indexing. Chat will unlock once ready.")
+                : "Ask a question about the codebase... (Enter to send, Shift+Enter for newline)"
+            }
             aria-label="Send a message"
-            disabled={isStreaming}
+            disabled={disabled || isStreaming}
             maxLength={MAX_CHAT_MESSAGE_LENGTH}
             className="w-full min-h-[52px] max-h-[180px] resize-none border-0 bg-transparent px-2 py-1 text-sm leading-6 tracking-[-0.02em] text-input-ink outline-none focus:outline-none focus-visible:outline-none ring-0 focus:ring-0 focus-visible:ring-0 [field-sizing:content] disabled:opacity-50"
           />
@@ -242,7 +255,7 @@ export function Composer({
                 <button
                   type="button"
                   onClick={toggleRecording}
-                  disabled={isStreaming && !recording}
+                  disabled={disabled || (isStreaming && !recording)}
                   aria-pressed={recording}
                   aria-label={recording ? "Stop voice input" : "Voice input"}
                   title={recording ? "Listening…" : "Voice input"}
@@ -265,8 +278,8 @@ export function Composer({
 
               <button
                 type="submit"
-                disabled={!messageText.trim() || isStreaming}
-                className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-[8px] bg-chat-ink text-chat transition-opacity duration-150 hover:opacity-90 active:scale-[0.96] disabled:cursor-not-allowed disabled:bg-chat-3 disabled:text-chat-ink-3"
+                disabled={disabled || !messageText.trim() || isStreaming}
+                className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-[8px] bg-chat-ink text-chat transition-[opacity,transform] duration-150 ease-out hover:opacity-90 active:scale-[0.985] active:duration-75 disabled:cursor-not-allowed disabled:bg-chat-3 disabled:text-chat-ink-3"
                 title="Send message (Enter)"
                 aria-label="Send message"
               >

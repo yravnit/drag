@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { Database } from "@/db/db";
 import { chunks, repositories } from "@/db/schema";
-import { and, eq, inArray, isNull, lt, ne, or } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, lt, ne, or } from "drizzle-orm";
 
 const LEASE_DURATION_MS = 10 * 60 * 1000;
 
@@ -240,4 +240,44 @@ export async function findRepositoriesWithPendingEmbeddings(
       ),
     )
     .limit(limit);
+}
+
+export async function markStaleProcessingRepositoriesAsFailed(
+  database: Database,
+  staleMs: number = 15 * 60 * 1000,
+): Promise<number> {
+  if (!database.select || !database.update) return 0;
+  const now = new Date();
+  const cutoff = new Date(Date.now() - staleMs);
+
+  const stale = await database
+    .select({ id: repositories.id })
+    .from(repositories)
+    .where(
+      and(
+        eq(repositories.embeddingStatus, "processing"),
+        or(
+          lt(repositories.updatedAt, cutoff),
+          and(
+            isNotNull(repositories.embeddingLeaseExpiresAt),
+            lt(repositories.embeddingLeaseExpiresAt, now),
+          ),
+        ),
+      ),
+    );
+
+  if (stale.length === 0) return 0;
+
+  for (const repo of stale) {
+    await database
+      .update(repositories)
+      .set({
+        embeddingStatus: "failed",
+        embeddingLeaseExpiresAt: null,
+        updatedAt: now,
+      })
+      .where(eq(repositories.id, repo.id));
+  }
+
+  return stale.length;
 }

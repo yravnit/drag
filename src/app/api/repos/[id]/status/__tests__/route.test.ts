@@ -16,9 +16,11 @@ vi.mock("@/lib/access/repositoryAccess", () => ({
 }));
 
 const mockSelect = vi.fn();
+const mockUpdate = vi.fn();
 vi.mock("@/db/db", () => ({
   db: {
     select: (...args: any[]) => mockSelect(...args),
+    update: (...args: any[]) => mockUpdate(...args),
   },
 }));
 
@@ -140,5 +142,42 @@ describe("GET /api/repos/[id]/status", () => {
     expect(data.stage).toBe("indexing");
     expect(data.filesIndexed).toBe(10);
     expect(data.totalSizeBytes).toBe(10240);
+  });
+
+  it("marks stalled processing as failed when updatedAt is older than 15 minutes", async () => {
+    mockGetSession.mockResolvedValueOnce({ user: { id: "user-1" } });
+    mockAssertAssociation.mockResolvedValueOnce(true);
+
+    const oldDate = new Date(Date.now() - 20 * 60 * 1000);
+    mockSelect.mockImplementation(() => ({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockImplementation(() => ({
+          limit: vi.fn().mockResolvedValue([
+            {
+              id: "repo-1",
+              embeddingStatus: "processing",
+              updatedAt: oldDate,
+              embeddingLeaseExpiresAt: null,
+              defaultBranch: "main",
+              primaryLanguage: "TypeScript",
+            },
+          ]),
+        })),
+      }),
+    }));
+
+    const mockWhere = vi.fn().mockResolvedValue([]);
+    const mockSet = vi.fn().mockReturnValue({ where: mockWhere });
+    mockUpdate.mockReturnValue({ set: mockSet });
+
+    const request = new Request("http://localhost/api/repos/repo-1/status");
+    const response = await GET(request, { params: Promise.resolve({ id: "repo-1" }) });
+
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    expect(data.embeddingStatus).toBe("failed");
+    expect(data.stage).toBe("failed");
+    expect(data.isStale).toBe(true);
+    expect(mockUpdate).toHaveBeenCalled();
   });
 });

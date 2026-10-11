@@ -533,6 +533,7 @@ export async function POST(request: Request) {
           authToken: userToken,
           revision: treeRevision,
           userId: session.user.id,
+          repositoryId: repoId,
         },
       ]);
     }
