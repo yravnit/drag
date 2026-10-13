@@ -337,10 +337,10 @@ async function markIngestFailedStep(
           .set({
             embeddingStatus: "failed",
             embeddingLeaseExpiresAt: null,
+            embeddingClaimId: null,
             updatedAt: new Date(),
           })
           .where(eq(repositories.id, targetId));
-        await clearEmbeddingLease(db, targetId);
       }
     }
   } catch (err) {

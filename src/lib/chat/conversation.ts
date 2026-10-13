@@ -92,19 +92,7 @@ export async function answerConversation(
     return { ok: false, status: 404, error: "Repository not found" };
   }
 
-  if (repo.embeddingStatus && repo.embeddingStatus !== "ready") {
-    const detail =
-      repo.embeddingStatus === "failed"
-        ? "Repository indexing failed. Please retry indexing before asking questions."
-        : "Repository is still indexing. Please wait until indexing completes before asking questions.";
-    return {
-      ok: false,
-      status: 400,
-      error: detail,
-    };
-  }
-
-  // 2. Verify access (Phase 3.4)
+  // 2. Verify access (Phase 3.4) before disclosing any indexing status.
   const { hasAccess } = await verifyRepositoryAccess(
     deps.database,
     { userId, repositoryId: repo.id, owner: repo.owner, name: repo.name },
@@ -118,6 +106,18 @@ export async function answerConversation(
       ok: false,
       status: 403,
       error: "Forbidden: You do not have access to this repository on GitHub",
+    };
+  }
+
+  if (repo.embeddingStatus !== "ready") {
+    const detail =
+      repo.embeddingStatus === "failed"
+        ? "Repository indexing failed. Please retry indexing before asking questions."
+        : "Repository is still indexing. Please wait until indexing completes before asking questions.";
+    return {
+      ok: false,
+      status: 400,
+      error: detail,
     };
   }
 

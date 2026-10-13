@@ -72,18 +72,17 @@ describe("Tenant Isolation", () => {
     });
 
     it("returns 403 when User A accesses a conversation for a repository they no longer have access to on GitHub", async () => {
+      let selectCall = 0;
       const mockDb = {
         select: () => ({
           from: () => ({
             where: () => ({
-              limit: async () => [
-                // Conversation exists for user-a
-                { id: "conv-a", userId: "user-a", repositoryId: "repo-private" },
-                // Repository exists
-                { id: "repo-private", owner: "org", name: "private-repo" },
-                // Access cache entry indicates access was revoked
-                { userId: "user-a", repositoryId: "repo-private", hasAccess: false, verifiedAt: new Date() },
-              ],
+              limit: async () => {
+                selectCall++;
+                if (selectCall === 1) return [{ id: "conv-a", userId: "user-a", repositoryId: "repo-private" }];
+                if (selectCall === 2) return [{ id: "repo-private", owner: "org", name: "private-repo", embeddingStatus: "ready" }];
+                return [{ userId: "user-a", repositoryId: "repo-private", hasAccess: false, verifiedAt: new Date() }];
+              },
             }),
           }),
         }),
@@ -188,3 +187,4 @@ describe("Tenant Isolation", () => {
     });
   });
 });
+

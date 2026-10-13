@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth/server";
 import { db } from "@/db/db";
 import { repositories, repositoryFiles, chunks } from "@/db/schema";
-import { eq, count, sql, and, isNotNull } from "drizzle-orm";
+import { eq, count, sql, and, isNotNull, isNull } from "drizzle-orm";
 import { assertRepositoryAssociation } from "@/lib/access/repositoryAccess";
 
 export async function GET(
@@ -40,6 +40,7 @@ export async function GET(
         embeddingModel: repositories.embeddingModel,
         updatedAt: repositories.updatedAt,
         embeddingLeaseExpiresAt: repositories.embeddingLeaseExpiresAt,
+        embeddingClaimId: repositories.embeddingClaimId,
       })
       .from(repositories)
       .where(eq(repositories.id, repoId))
@@ -92,28 +93,72 @@ export async function GET(
     const now = new Date();
     const STALE_INGEST_MS = 15 * 60 * 1000;
     const isLeaseExpired = repo.embeddingLeaseExpiresAt
-      ? new Date(repo.embeddingLeaseExpiresAt).getTime() < now.getTime()
+      ? repo.embeddingLeaseExpiresAt.getTime() < now.getTime()
       : false;
-    const isUpdateStale = repo.updatedAt
-      ? now.getTime() - new Date(repo.updatedAt).getTime() > STALE_INGEST_MS
+    // `updatedAt` only indicates staleness when no lease exists. When a lease exists, only an
+    // expired lease makes a processing repository stale.
+    const isUpdateStale = !repo.embeddingLeaseExpiresAt && repo.updatedAt
+      ? now.getTime() - repo.updatedAt.getTime() > STALE_INGEST_MS
       : false;
+    // An ingestion-owned signal (claim id or active/expired lease) must exist before a stale
+    // or expired timestamp can turn an active repository into a failure. A bare `updatedAt`
+    // is not proof that ingestion ever owned the row.
+    const hasIngestionSignal = Boolean(repo.embeddingClaimId) || Boolean(repo.embeddingLeaseExpiresAt);
 
     let rawStatus = repo.embeddingStatus || "processing";
     let isStale = false;
 
-    if (rawStatus === "processing" && (isLeaseExpired || isUpdateStale)) {
-      rawStatus = "failed";
-      isStale = true;
+    if (
+      rawStatus === "processing" &&
+      (isLeaseExpired || isUpdateStale) &&
+      hasIngestionSignal
+    ) {
       try {
         if (db.update) {
-          await db
+          const updateQuery = db
             .update(repositories)
             .set({
               embeddingStatus: "failed",
               embeddingLeaseExpiresAt: null,
+              embeddingClaimId: null,
               updatedAt: now,
             })
-            .where(eq(repositories.id, repoId));
+            .where(
+              and(
+                eq(repositories.id, repoId),
+                eq(repositories.embeddingStatus, "processing"),
+                repo.embeddingClaimId
+                  ? eq(repositories.embeddingClaimId, repo.embeddingClaimId)
+                  : isNull(repositories.embeddingClaimId),
+                repo.embeddingLeaseExpiresAt
+                  ? eq(repositories.embeddingLeaseExpiresAt, repo.embeddingLeaseExpiresAt)
+                  : isNull(repositories.embeddingLeaseExpiresAt),
+                repo.updatedAt
+                  ? eq(repositories.updatedAt, repo.updatedAt)
+                  : isNull(repositories.updatedAt),
+              ),
+            );
+
+          const updatedResult =
+            typeof updateQuery.returning === "function"
+              ? await updateQuery.returning({ id: repositories.id })
+              : await updateQuery;
+
+          const matchedRows = Array.isArray(updatedResult)
+            ? updatedResult.length
+            : typeof updatedResult?.rowCount === "number"
+              ? updatedResult.rowCount
+              : 0;
+
+          // A concurrent completion or new claim makes the conditional update affect zero rows,
+          // which preserves that newer state instead of clobbering it.
+          if (matchedRows > 0) {
+            rawStatus = "failed";
+            isStale = true;
+          }
+        } else {
+          rawStatus = "failed";
+          isStale = true;
         }
       } catch (err) {
         console.error("Failed to mark stale repository as failed:", err);

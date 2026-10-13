@@ -462,16 +462,18 @@ export default function Home() {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || "Could not restart indexing.");
       }
-      // Update local state to processing immediately
-      setStatusTracker({
-        id: repo.id,
-        embeddingStatus: "processing",
-        indexedAt: repo.indexedAt,
-      });
+      // Update local state to processing immediately, but only move the selected repository's
+      // tracker when this retry actually targets the selected repository. Retrying another row
+      // must not replace the selected repository's ingestion tracker.
       setRepositoriesList((prev) =>
         prev.map((r) => (r.id === repo.id ? { ...r, embeddingStatus: "processing" } : r)),
       );
       if (selectedRepo?.id === repo.id) {
+        setStatusTracker({
+          id: repo.id,
+          embeddingStatus: "processing",
+          indexedAt: repo.indexedAt,
+        });
         setSelectedRepo((prev) => (prev ? { ...prev, embeddingStatus: "processing" } : null));
       }
     } catch (err) {
@@ -481,18 +483,20 @@ export default function Home() {
   };
 
   const handleDeleteRepo = async (repoId: string) => {
-    if (statusTracker?.id === repoId) {
-      setStatusTracker(null);
-    }
-    if (selectedRepo?.id === repoId) {
-      setSelectedRepo(null);
-    }
+    // Defer clearing selection/tracking state until the DELETE actually succeeds, so a failed
+    // removal leaves the user's selected repository and status tracker intact.
     const res = await fetch(`/api/repos/${repoId}`, { method: "DELETE" });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
       throw new Error(data.error || "Could not remove this repository.");
     }
     setPendingRepoDelete(null);
+    if (statusTracker?.id === repoId) {
+      setStatusTracker(null);
+    }
+    if (selectedRepo?.id === repoId) {
+      setSelectedRepo(null);
+    }
     await Promise.all([loadUserRepos(), loadPlanUsage()]);
   };
 
@@ -716,7 +720,7 @@ export default function Home() {
         body: JSON.stringify({
           conversationId,
           message: promptToRetry,
-          isRetry: true,
+          isRetry: isSavedMessage,
           retryMessageId: isSavedMessage ? failedMsg.id : undefined,
           model: selectedModel !== "default" ? selectedModel : undefined,
           responseMode,

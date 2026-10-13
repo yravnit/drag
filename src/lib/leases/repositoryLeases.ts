@@ -251,16 +251,28 @@ export async function markStaleProcessingRepositoriesAsFailed(
   const cutoff = new Date(Date.now() - staleMs);
 
   const stale = await database
-    .select({ id: repositories.id })
+    .select({
+      id: repositories.id,
+      embeddingClaimId: repositories.embeddingClaimId,
+      embeddingLeaseExpiresAt: repositories.embeddingLeaseExpiresAt,
+      updatedAt: repositories.updatedAt,
+    })
     .from(repositories)
     .where(
       and(
         eq(repositories.embeddingStatus, "processing"),
         or(
-          lt(repositories.updatedAt, cutoff),
+          isNotNull(repositories.embeddingClaimId),
+          isNotNull(repositories.embeddingLeaseExpiresAt),
+        ),
+        or(
+          and(
+            isNull(repositories.embeddingLeaseExpiresAt),
+            lt(repositories.updatedAt, cutoff),
+          ),
           and(
             isNotNull(repositories.embeddingLeaseExpiresAt),
-            lt(repositories.embeddingLeaseExpiresAt, now),
+            lt(repositories.embeddingLeaseExpiresAt, cutoff),
           ),
         ),
       ),
@@ -268,16 +280,43 @@ export async function markStaleProcessingRepositoriesAsFailed(
 
   if (stale.length === 0) return 0;
 
+  let changedRows = 0;
   for (const repo of stale) {
-    await database
+    const updateQuery = database
       .update(repositories)
       .set({
         embeddingStatus: "failed",
         embeddingLeaseExpiresAt: null,
+        embeddingClaimId: null,
         updatedAt: now,
       })
-      .where(eq(repositories.id, repo.id));
+      .where(
+        and(
+          eq(repositories.id, repo.id),
+          eq(repositories.embeddingStatus, "processing"),
+          repo.embeddingClaimId
+            ? eq(repositories.embeddingClaimId, repo.embeddingClaimId)
+            : isNull(repositories.embeddingClaimId),
+          repo.embeddingLeaseExpiresAt
+            ? eq(repositories.embeddingLeaseExpiresAt, repo.embeddingLeaseExpiresAt)
+            : isNull(repositories.embeddingLeaseExpiresAt),
+          repo.updatedAt
+            ? eq(repositories.updatedAt, repo.updatedAt)
+            : isNull(repositories.updatedAt),
+        ),
+      );
+
+    const result =
+      typeof updateQuery.returning === "function"
+        ? await updateQuery.returning({ id: repositories.id })
+        : await updateQuery;
+
+    changedRows += Array.isArray(result)
+      ? result.length
+      : typeof result?.rowCount === "number"
+        ? result.rowCount
+        : 0;
   }
 
-  return stale.length;
+  return changedRows;
 }

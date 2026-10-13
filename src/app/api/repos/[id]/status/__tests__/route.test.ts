@@ -157,7 +157,7 @@ describe("GET /api/repos/[id]/status", () => {
               id: "repo-1",
               embeddingStatus: "processing",
               updatedAt: oldDate,
-              embeddingLeaseExpiresAt: null,
+              embeddingLeaseExpiresAt: oldDate,
               defaultBranch: "main",
               primaryLanguage: "TypeScript",
             },
@@ -166,7 +166,7 @@ describe("GET /api/repos/[id]/status", () => {
       }),
     }));
 
-    const mockWhere = vi.fn().mockResolvedValue([]);
+    const mockWhere = vi.fn().mockResolvedValue([{ id: "repo-1" }]);
     const mockSet = vi.fn().mockReturnValue({ where: mockWhere });
     mockUpdate.mockReturnValue({ set: mockSet });
 
@@ -181,3 +181,4 @@ describe("GET /api/repos/[id]/status", () => {
     expect(mockUpdate).toHaveBeenCalled();
   });
 });
+

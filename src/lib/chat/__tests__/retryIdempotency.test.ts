@@ -100,7 +100,7 @@ describe("Chat Retry & Idempotency Audit (5D)", () => {
     // 1: conv, 2: repo, 3: access cache, 4: history (including the previous user message)
     const selectQueue = [
       Promise.resolve([{ id: "conv-1", repositoryId: "repo-1", userId: "user-1" }]),
-      Promise.resolve([{ id: "repo-1", owner: "octocat", name: "drag" }]),
+      Promise.resolve([{ id: "repo-1", owner: "octocat", name: "drag", embeddingStatus: "ready" }]),
       Promise.resolve([{ userId: "user-1", repositoryId: "repo-1", hasAccess: true, verifiedAt: new Date() }]),
       Promise.resolve([
         { role: "user", content: "How does auth work?" },
@@ -160,7 +160,7 @@ describe("Chat Retry & Idempotency Audit (5D)", () => {
   it("cannot delete a completed assistant message supplied as retryMessageId", async () => {
     const selectQueue = [
       Promise.resolve([{ id: "conv-1", repositoryId: "repo-1", userId: "user-1" }]),
-      Promise.resolve([{ id: "repo-1", owner: "octocat", name: "drag" }]),
+      Promise.resolve([{ id: "repo-1", owner: "octocat", name: "drag", embeddingStatus: "ready" }]),
       Promise.resolve([{ userId: "user-1", repositoryId: "repo-1", hasAccess: true, verifiedAt: new Date() }]),
       Promise.resolve([]),
     ];
@@ -199,7 +199,7 @@ describe("Chat Retry & Idempotency Audit (5D)", () => {
   it("inserts both user and assistant messages during regular non-retry execution", async () => {
     const selectQueue = [
       Promise.resolve([{ id: "conv-1", repositoryId: "repo-1", userId: "user-1" }]),
-      Promise.resolve([{ id: "repo-1", owner: "octocat", name: "drag" }]),
+      Promise.resolve([{ id: "repo-1", owner: "octocat", name: "drag", embeddingStatus: "ready" }]),
       Promise.resolve([{ userId: "user-1", repositoryId: "repo-1", hasAccess: true, verifiedAt: new Date() }]),
       Promise.resolve([]),
     ];
@@ -236,7 +236,7 @@ describe("Chat Retry & Idempotency Audit (5D)", () => {
 
     const selectQueue = [
       Promise.resolve([{ id: "conv-1", repositoryId: "repo-1", userId: "user-1" }]),
-      Promise.resolve([{ id: "repo-1", owner: "octocat", name: "drag" }]),
+      Promise.resolve([{ id: "repo-1", owner: "octocat", name: "drag", embeddingStatus: "ready" }]),
       Promise.resolve([{ userId: "user-1", repositoryId: "repo-1", hasAccess: true, verifiedAt: new Date() }]),
       // 4: target assistant message
       Promise.resolve([
@@ -314,7 +314,7 @@ describe("Chat Retry & Idempotency Audit (5D)", () => {
   it("returns 409 when target assistant message is already streaming", async () => {
     const selectQueue = [
       Promise.resolve([{ id: "conv-1", repositoryId: "repo-1", userId: "user-1" }]),
-      Promise.resolve([{ id: "repo-1", owner: "octocat", name: "drag" }]),
+      Promise.resolve([{ id: "repo-1", owner: "octocat", name: "drag", embeddingStatus: "ready" }]),
       Promise.resolve([{ userId: "user-1", repositoryId: "repo-1", hasAccess: true, verifiedAt: new Date() }]),
       // Target assistant message is currently streaming
       Promise.resolve([{ id: "a-1", conversationId: "conv-1", role: "assistant", status: "streaming", createdAt: new Date() }]),
@@ -348,7 +348,7 @@ describe("Chat Retry & Idempotency Audit (5D)", () => {
   it("returns 404 when regenerateMessageId is not found or unauthorized", async () => {
     const selectQueue = [
       Promise.resolve([{ id: "conv-1", repositoryId: "repo-1", userId: "user-1" }]),
-      Promise.resolve([{ id: "repo-1", owner: "octocat", name: "drag" }]),
+      Promise.resolve([{ id: "repo-1", owner: "octocat", name: "drag", embeddingStatus: "ready" }]),
       Promise.resolve([{ userId: "user-1", repositoryId: "repo-1", hasAccess: true, verifiedAt: new Date() }]),
       // Target assistant message query returns nothing (not found or unauthorized)
       Promise.resolve([]),

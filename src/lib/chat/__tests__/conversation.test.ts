@@ -182,6 +182,7 @@ describe("answerConversation", () => {
     const setup = baseSetup([
       Promise.resolve([{ id: "conv-1", userId: "user-1", repositoryId: "repo-1" }]),
       Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name", embeddingStatus: "processing" }]),
+      freshAccessRow(true),
     ]);
 
     const result = await answerConversation(setup.deps, setup.input);
@@ -200,7 +201,7 @@ describe("answerConversation", () => {
     // network call, so no vi.mock is needed.
     const setup = baseSetup([
       Promise.resolve([{ id: "conv-1", userId: "user-1", repositoryId: "repo-1" }]),
-      Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name" }]),
+      Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name", embeddingStatus: "ready" }]),
       freshAccessRow(false),
     ]);
 
@@ -217,7 +218,7 @@ describe("answerConversation", () => {
   it("happy path: streams fully, inserts both messages and persists completed state with citations", async () => {
     const setup = baseSetup([
       Promise.resolve([{ id: "conv-1", userId: "user-1", repositoryId: "repo-1" }]),
-      Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name" }]),
+      Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name", embeddingStatus: "ready" }]),
       freshAccessRow(true),
       // History query: previous completed user messages.
       Promise.resolve([{ role: "user", content: "earlier question" }]),
@@ -274,7 +275,7 @@ describe("answerConversation", () => {
     const setup = baseSetup(
       [
         Promise.resolve([{ id: "conv-1", userId: "user-1", repositoryId: "repo-1" }]),
-        Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name" }]),
+        Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name", embeddingStatus: "ready" }]),
         freshAccessRow(true),
         Promise.resolve([]),
       ],
@@ -305,7 +306,7 @@ describe("answerConversation", () => {
     const setup = baseSetup(
       [
         Promise.resolve([{ id: "conv-1", userId: "user-1", repositoryId: "repo-1" }]),
-        Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name" }]),
+        Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name", embeddingStatus: "ready" }]),
         freshAccessRow(true),
       ],
       {
@@ -333,7 +334,7 @@ describe("answerConversation", () => {
     const setup = baseSetup(
       [
         Promise.resolve([{ id: "conv-1", userId: "user-1", repositoryId: "repo-1" }]),
-        Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name" }]),
+        Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name", embeddingStatus: "ready" }]),
         freshAccessRow(true),
         Promise.resolve([]),
       ],
@@ -360,7 +361,7 @@ describe("answerConversation", () => {
     const setup = baseSetup(
       [
         Promise.resolve([{ id: "conv-1", userId: "user-1", repositoryId: "repo-1" }]),
-        Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name" }]),
+        Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name", embeddingStatus: "ready" }]),
         freshAccessRow(true),
         Promise.resolve([]),
       ],
@@ -388,7 +389,7 @@ describe("answerConversation", () => {
     const setup = baseSetup(
       [
         Promise.resolve([{ id: "conv-1", userId: "user-1", repositoryId: "repo-1" }]),
-        Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name" }]),
+        Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name", embeddingStatus: "ready" }]),
         freshAccessRow(true),
         // Database returns desc(createdAt), so latest first
         Promise.resolve([
@@ -446,7 +447,7 @@ describe("answerConversation", () => {
         const setup = baseSetup(
           [
             Promise.resolve([{ id: "conv-1", userId: "user-1", repositoryId: "repo-1" }]),
-            Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name" }]),
+            Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name", embeddingStatus: "ready" }]),
             freshAccessRow(true),
             Promise.resolve([]),
           ],
@@ -483,7 +484,7 @@ describe("answerConversation", () => {
     const setup = baseSetup(
       [
         Promise.resolve([{ id: "conv-1", userId: "user-1", repositoryId: "repo-1", title: "New Chat Thread" }]),
-        Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name" }]),
+        Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name", embeddingStatus: "ready" }]),
         freshAccessRow(true),
         Promise.resolve([]),
       ],
@@ -520,7 +521,7 @@ describe("answerConversation", () => {
     const setup = baseSetup(
       [
         Promise.resolve([{ id: "conv-1", userId: "user-1", repositoryId: "repo-1", title: "Untouched Name" }]),
-        Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name" }]),
+        Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name", embeddingStatus: "ready" }]),
         freshAccessRow(true),
         Promise.resolve([]),
       ],
@@ -559,4 +560,6 @@ describe("answerConversation", () => {
     expect(values).toContain("Untouched Name");
   });
 });
+
+
 

@@ -133,6 +133,12 @@ export function ChatWindow({
 
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
+  // Reset the elapsed counter when the selected repository changes, even when both
+  // repositories are in the same indexing stage, so timing starts over per repository.
+  useEffect(() => {
+    setElapsedSeconds(0);
+  }, [selectedRepo?.id]);
+
   useEffect(() => {
     if (stage === "ready" || stage === "failed") {
       setElapsedSeconds(0);
@@ -279,7 +285,7 @@ export function ChatWindow({
                     Indexing is taking longer than expected. Large repositories can take a few minutes, or you can restart the job.
                   </p>
                 )}
-                {elapsedSeconds > 60 && (
+                {statusTracker?.isStale && (
                   <Button
                     variant="outline"
                     size="sm"
@@ -338,20 +344,22 @@ export function ChatWindow({
                     : `Repository is still indexing (${stage}, elapsed: ${formattedElapsed}). Chat will unlock once ready.`}
                 </span>
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleRetry}
-                disabled={retrying}
-                className="text-xs"
-              >
-                {retrying ? (
-                  <Loader2 className="size-3 animate-spin" aria-hidden />
-                ) : (
-                  <RotateCcw className="size-3" aria-hidden />
-                )}
-                {retrying ? "Restarting..." : "Restart"}
-              </Button>
+              {(statusTracker?.isStale || stage === "failed") && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleRetry}
+                  disabled={retrying}
+                  className="text-xs"
+                >
+                  {retrying ? (
+                    <Loader2 className="size-3 animate-spin" aria-hidden />
+                  ) : (
+                    <RotateCcw className="size-3" aria-hidden />
+                  )}
+                  {retrying ? "Restarting..." : "Restart"}
+                </Button>
+              )}
             </div>
           )}
 

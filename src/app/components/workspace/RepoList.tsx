@@ -257,29 +257,10 @@ export function RepoList({
                     information. Indexing and failure still show a dot because those need watching,
                     and both are also spelled out in the status line below. */}
                 {status === "processing" && (
-                  <div className="flex items-center gap-1">
-                    <span
-                      className="size-2 animate-pulse rounded-full bg-amber-500"
-                      title="Indexing"
-                    />
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        void runAction(repo, "retry");
-                      }}
-                      disabled={isPending}
-                      title="Restart indexing"
-                      aria-label={`Restart indexing ${repo.owner}/${repo.name}`}
-                      className="cursor-pointer rounded-[4px] p-0.5 text-ink-3 transition-[color,background-color,transform] duration-150 hover:bg-surface-2 hover:text-ink active:scale-[0.985] active:duration-75 disabled:opacity-50"
-                    >
-                      {isPending ? (
-                        <Loader2 className="size-3 animate-spin" aria-hidden />
-                      ) : (
-                        <RotateCcw className="size-3" aria-hidden />
-                      )}
-                    </button>
-                  </div>
+                  <span
+                    className="size-2 animate-pulse rounded-full bg-amber-500"
+                    title="Indexing"
+                  />
                 )}
                 {status === "failed" && (
                   <div className="flex items-center gap-1">
