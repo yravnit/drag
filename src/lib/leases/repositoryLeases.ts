@@ -272,7 +272,7 @@ export async function markStaleProcessingRepositoriesAsFailed(
           ),
           and(
             isNotNull(repositories.embeddingLeaseExpiresAt),
-            lt(repositories.embeddingLeaseExpiresAt, cutoff),
+            lt(repositories.embeddingLeaseExpiresAt, now),
           ),
         ),
       ),
