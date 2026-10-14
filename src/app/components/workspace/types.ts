@@ -39,6 +39,7 @@ export interface StatusTracker {
   id: string;
   embeddingStatus: string;
   stage?: "preparing" | "indexing" | "embedding" | "ready" | "failed";
+  isStale?: boolean;
   indexedAt: string | null;
   filesIndexed?: number;
   chunksCount?: number;

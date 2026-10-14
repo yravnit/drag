@@ -282,6 +282,10 @@ Stores validated NVIDIA chat model availability from weekly cron probe runs:
 32. **The chat prompt must never quote the phrasing it forbids**: the answer prompt in `conversation.ts` deliberately carries no blacklist of banned openings, because naming them is what produced them — the model sees the forbidden wording adjacent to the question and echoes it back. State the wanted behaviour instead ("your opening sentence responds to the question"), and never let the prompt refer to its own input as a "retrieved context". `buildSystemPrompt.test.ts` fails if any forbidden opening reappears in the prompt text. Verify new prompt rules against a live model before keeping them: of the four rules tried in this round, one had to be reverted outright and another reshaped, because a rule telling the model to name the source as "the repository or the code" made the leak *worse* by licensing a trailing "in the provided code" inside the opening sentence.
 33. **Stream writes are attempt-owned and regeneration claims atomically**: `answerConversation` claims an assistant message with an atomic check requiring `messages.status != 'streaming'`. It writes an attempt UUID to the message row and scopes every subsequent status, chunk, and failure write to `(id, attemptId)`. A slower or cancelled stream cannot overwrite a newer answer or mark it failed after it terminates. In the workspace UI, `handleEditMessage` checks a monotonic edit sequence counter before rolling back optimistic text across both HTTP error responses and network error exceptions, so an earlier failed save never clobbers a newer edit that succeeded. Covered by `workspaceRequestScope.test.tsx`.
 34. **Ingestion memory bounding and secret regex anchoring**: `SemanticChunker.chunkFile` releases WebAssembly AST memory by calling `tree.delete()` in a `try...finally` block. `BatchProcessor` processes files sequentially within batches to bound concurrent parser allocations, and spills chunk arrays directly to disk files via `spillChunksTo` in `runIngestionStep` so large chunk payloads never stay resident in process memory; when a file processing result carries an error, such as a failed spill, `runIngestionStep` discards leftover chunks (`res.chunks = []`) and skips disk writing. `isSensitiveContent` anchors private key and certificate headers to line boundaries recognizing LF, CRLF, and lone CR (`(?:^|\r\n?|\n)\s*...`), and detects complete embedded key and certificate blocks in source strings or template literals while preserving false-positive resistance for documentation prose and scanner regexes.
+35. **Ingestion crash and stale state recovery**: `ingestRepository` in `src/workflows/ingest.ts` wraps `runIngestionStep` in a `try...catch` block. On failure, `markIngestFailedStep` sets `embedding_status = "failed"`, clears embedding leases, and rethrows the error for workflow runner accounting. `GET /api/repos/[id]/status` checks for stale jobs where `embeddingStatus === "processing"` with an expired embedding lease, writing `failed` to the database and returning `stage: "failed"` with `isStale: true` to terminate the client poll loop. Repositories that hold no embedding lease (active ingestions) are not auto-failed by this probe, because ingestion owns no lease and does not refresh `updatedAt` while downloading or parsing files. The background embed cron's `markStaleProcessingRepositoriesAsFailed` applies the same lease-only rule.
+36. **Unready repository chat protection**: `answerConversation` checks `repo.embeddingStatus === "ready"` before retrieval. Unready repositories reject the query with HTTP 400 and trigger monthly query quota rollback. `ChatWindow` displays an indexing banner and disables the `Composer` when the selected repository is not ready.
+37. **Preserved chat failure state and clean unmounts**: `Composer` releases `SpeechRecognition` listeners cleanly by setting `recordingRef.current = false` inside cleanup and aborting instances without retriggering `onend`. `handleDeleteRepo` clears `statusTracker` before initiating DELETE requests to eliminate extraneous poll calls. `page.tsx` keeps failed assistant turns visible locally without premature server message reloads that previously erased error bubbles.
+38. **Tactile transition easing**: Button and card interactive states include `transform` in transition property definitions alongside `active:duration-75` and `scale-[0.985]`, replacing 0ms snapping transitions. Modal entrance keyframes ease in from `scale: 0.985` over 150ms.
 
 ---
 
@@ -493,165 +497,21 @@ DRAG monitors NVIDIA LLM availability automatically without manual model lists.
 - **CI**. `.github/workflows/ci.yml` runs `npm ci`, lint, lint:ox, `tsc --noEmit`, `npm test`, `eval:retrieval`, and `next build` on every push and PR.
 - **Format**. `npm run format:ox` is *not* enforced in CI and currently reports issues across the tree; treat it as advisory and format only the files you touch.
 - **`npm ci` and lockfile consistency resolved.** `better-auth` is pinned to exact `1.6.24` in `package.json`, `.npmrc` sets `legacy-peer-deps=true` so npm cleanly resolves Drizzle ORM v1 pre-release peer dependencies, and `package-lock.json` was regenerated with `npm install --package-lock-only`. Both local `npm install` and CI `npm ci` pass without `ERESOLVE` or missing package warnings.
-- **Ad-hoc dependency auditing.** Knip, dependency-cruiser, and vitest coverage were run once as throwaway `--no-save` installs to find dead code; none are project dependencies and none are wired into scripts or CI. See section 10 for the findings and what was removed.
+ - **Ad-hoc dependency auditing.** Knip, dependency-cruiser, and vitest coverage were run once as throwaway --no-save installs to find dead code; none are project dependencies and none are wired into scripts or CI.
 
-*Last updated: 2026-10-08 (test hardening: `route.test.ts` records the querying `repositories` select alongside each row lock and asserts the URL fallback's lock by ordinal, so the attach transaction's `FOR UPDATE` can no longer make the concurrency assertion pass while the URL lookup is unlocked; verified by deleting the URL lookup's `.for("update")` and watching that one test fail. 568 tests green, `oxlint` clean. The earlier 2026-10-08 round-5 remediation: the URL fallback in `POST /api/repos` compares `github_id` under a row lock instead of freeing a matching row's URL, and `consumeCounter` rejects a non-positive cap before writing; `tsc --noEmit` and both linters clean. The prior 2026-10-06 pass had verified every section against the code: shared-repository branch guard on `/api/workflows/ingest-repository` (409), Mermaid `%%{init}` and frontmatter stripped, genuinely LRU parser cache, `eval:retrieval` thresholds enforced in CI, GitHub token-isolation test rewritten so it can fail, unreadable directories skip instead of aborting ingestion, and the drifted claims in sections 3-7, 9, and 10 corrected)*
-
+*Last updated: 2026-10-14 (review remediation + full-repo review cleanup: background lease staleness now uses lease expiry instead of 15-minute cutoff, claim-conditioned status updates, server-confirmed restart gating, persisted-turn-aware retries, strict ready embedding status, retry-tracker scoping, deferred deletion, ingest failure lease cleanup. 651 tests green, `tsc --noEmit` and oxlint clean.)*
 ---
 
-## 10. CodeRabbit review remediation register (2026-10-02)
+## 10. Recent remediation history (condensed)
 
-Every finding was verified against the code before being actioned. Severity labels are the
-reviewer's; the outcome column is ours.
-
-| # | Severity | Location | Outcome |
-|---|---|---|---|
-| 1 | minor | `nvidiaModelService.ts` DB read returned an empty list | **FIXED** — rethrown; route 500 is now reachable |
-| 2 | minor | `retriever.ts` swallowed the provider lookup error | **FIXED** — removed; mocks updated |
-| 3 | minor | `cloudflareEmbeddingProvider.ts` accepted short vectors | **FIXED** — throws when `rawVector.length < targetDimensions` |
-| 4 | major | `dbLayer.ts` visibility flip left a stale `gemini` provider | **FIXED** — `router.ts` now checks `isPrivate` first; duplicate `resolveEmbeddingProvider` deleted. Stale chunks after a flip are logged as follow-up |
-| 5 | major | `nvidiaModelService.ts` never retired vanished models | **FIXED** — `notInArray` retirement pass after a successful probe round |
-| 6 | minor | `geminiEmbeddingProvider.ts` key in URL | **FIXED** — `x-goog-api-key` header |
-| 7 | minor | `repos/[id]/file/route.ts` cache header | **FIXED** — `private, no-store` |
-| 8 | minor | `formatters.ts` sub-KB formatting | **NOT APPLICABLE** — already fixed at `formatters.ts:9`; tests pass |
-| 9 | major | `PlanUsageModal.tsx` hardcoded personal email | **FIXED** — email removed from copy |
-| 10 | major | `enterpriseBranchUi.test.tsx` asserted the email | **FIXED** — replaced with an explicit `not.toContain` assertion |
-| 11 | minor | `phase1UxCompletion.test.tsx` expected `"512 B"` | **NOT APPLICABLE** — passes against current `formatBytes` |
-| 12 | minor | `nvidiaModelService.ts` discovery fetch had no timeout | **FIXED** — `AbortSignal.timeout(10_000)` |
-| 13 | major | `repos/route.ts` pre-check blocked retries | **FIXED** — pre-check deleted; the transactional check after the GitHub lookups exempts existing associations |
-| 14 | critical | `ingest.ts` incremental check blocked first-time Free ingestion | **FIXED** — gated on a non-empty tracked-files map |
-| 15 | major | `repos/route.ts` shared-row branch overwrite / silent reuse | **FIXED** — 409 on branch mismatch. The same guard was ported to `ingest-repository/route.ts` on 2026-10-06, which had been missing it (see section 5 claim 17) |
-| 16 | major | `ingest-repository/route.ts` skipped branch/file/size policy and never associated the user | **FIXED** — resolved branch assigned to the payload, `assertPlanRepositoryEntitlements` applied, association created in the limit-check transaction |
-| 17 | major | `entitlements.ts` quota enforcement failed open | **FIXED** — catch-alls and the non-transactional fallback removed |
-| 18 | critical | `repos/route.ts` wrote `headCommitSha` before ingestion | **FIXED** — route persists only `defaultBranch`; the pipeline records the SHA |
-| 19 | major | `chat/route.ts` did not roll back on throw, and rolled back unmetered plans | **FIXED** — rollback on throw, gated on `quotaResult.limit !== null` |
-| 20 | major | `sync.ts` used one arbitrary associated user | **FIXED** — all associations evaluated, entitled user id forwarded to `ingestRepository` |
-| 21 | major | `entitlements.ts` rollback lost concurrent updates | **FIXED** — single `GREATEST(count - 1, 0)` statement |
-| 22 | minor | `planConfig.ts` Hobby unmetered when env unset | **FIXED** — `HOBBY_MONTHLY_QUERY_LIMIT` defaults to 250 |
-| 23 | major | `entitlements.ts` repository-limit lock released before the insert | **FIXED** — check and association insert share one transaction in both add routes |
-
-### Follow-up findings from the 2026-10-06 verification pass
-
-Found by auditing this document against the code rather than by review. All are fixed on `frontend`.
-
-| # | Severity | Location | Outcome |
-|---|---|---|---|
-| 24 | critical | `ingest-repository/route.ts` had no shared-repository branch guard, unlike `repos/route.ts` | **FIXED** — a paying user could re-ingest a shared row on another branch and serve every other user the wrong code; now 409 |
-| 25 | major | `normalizeMermaid.ts` stripped only line styling, not `%%{init}` or frontmatter | **FIXED** — both stripped; model output could otherwise override the theme and `htmlLabels` |
-| 26 | major | `regressionAudit.test.ts` GitHub token-isolation assertion used a two-arg matcher against a one-arg call | **FIXED** — the assertion could never fail, and the fetcher was never invoked because `answerConversation` is mocked; the test now exercises the fetcher directly |
-| 27 | minor | `runEval.ts` threshold gate unreachable from `npm run eval:retrieval` | **FIXED** — script passes `--check-thresholds` and CI runs it |
-| 28 | minor | `parserManager.ts` eviction was FIFO despite the LRU comment | **FIXED** — a cache hit re-inserts its key |
-| 29 | minor | `fileFilter.ts` `readdir` unguarded, so one unreadable directory aborted the whole ingestion run | **FIXED** — caught and skipped with a warning |
-| 30 | minor | `messages.status` accepted any string; the four lifecycle values were convention only | **FIXED** — `messages_status_check` CHECK constraint plus `$type<MessageStatus>()`; migration `20261006161125_messages_status_check` is **applied to Neon** (ledger verified, all 18 existing rows were valid before the constraint was added) |
-| 31 | cleanup | `NimEmbeddingProvider` and `MockEmbeddingProvider` were dead code, along with `config.ts`, `EMBEDDING_MODEL`, `EMBEDDING_BASE_URL`, and the NVIDIA embedding endpoint guard | **REMOVED** — `embeddingProvider.ts` now holds only the interface; `openai` stays for `llmProvider.ts`. Benchmark queries were repointed at the Gemini and Cloudflare providers |
+- All major review findings are already applied in code: claim-owned embedding leases, atomic retry deletes, access verification before status disclosure, strict ready status for chat, conditional stale-failure updates, deferred repository deletion, server-confirmed restart gating, persisted-turn-aware retries, and ingest failure lease cleanup.
+- Historical CodeRabbit/Greptile/PR remediation registers were removed from this handoff; current behavior is documented in sections 5-9 and the tests in src.
+- Tests: `npm test` = 651 passing; typecheck clean. Formatting (oxfmt) is not fully applied and is a style-only issue.
 
 ---
-
-## 11. Dead-code sweep (2026-10-06)
-
-Found with one-off `--no-save` installs of **knip** 6.40.0, **dependency-cruiser** 18.5.0, and `vitest run --coverage`. Neither tool was added to `package.json`, `package-lock.json`, or any npm script; both were uninstalled afterwards. `vitest` and `@vitest/coverage-v8` were already project devDependencies.
-
-### Removed
-
-| Kind | Finding | Outcome |
-|---|---|---|
-| unused file | `src/lib/embeddings/index.ts` — a one-line `export * from "./embeddingProvider"` barrel with no importers | **DELETED** |
-| circular dep | `embeddingProvider.ts:31-33` re-exported its own three siblings, so `router → provider → router` cycled. Left behind when the `index.ts` barrel was inlined | **REMOVED** — `embeddingProvider.ts` is now types-only. dependency-cruiser reports **0 cycles** |
-| unused dep | `@types/tar` — `tar@7.5.21` ships its own `dist/commonjs/index.d.ts`, so the DefinitelyTyped stub was dead weight | **REMOVED** |
-| unused devDep | `@types/dompurify` — `dompurify@3.2.4` ships its own `dist/purify.cjs.d.ts` | **REMOVED** |
-| unlisted dep | `ignore` was imported by `fileFilter.ts` but only present as a transitive dev dependency of eslint, so production ingestion depended on hoisting by luck | **PROMOTED** to a direct `dependencies` entry at the already-resolved `^5.3.2` (no lockfile churn) |
-| unused export | `authClient`, `signUp` (`auth/client.ts`) — only `signIn`/`signOut`/`useSession` are consumed | **DE-EXPORTED** |
-| unused export | `SENSITIVE_EXTENSIONS`, `isProjectFile`, `SupportedSourceLanguage`, `ProjectDocumentLanguage` (`ingestion/fileFilter.ts`) | **DE-EXPORTED** (kept module-private; `SENSITIVE_EXTENSIONS` still used by `isSensitiveFile`) |
-| unused export | `retrieveChunksLexical`, `retrieveChunksHybrid`, `HybridRetrievalOptions` (`retrieval/retriever.ts`) | **REMOVED/DE-EXPORTED** — the lexical and hybrid helpers are internal to the file; `HybridRetrievalOptions` was never referenced at all |
-| unused export | `claimEmbeddingLease`/`finalizeEmbedding`/`clearEmbeddingLease` re-exported from `workflows/embed.ts`; `claimSyncBatch`/`settleSyncLease` from `workflows/sync.ts` | **REMOVED** — pure pass-through re-exports, imported directly from `lib/leases/repositoryLeases` everywhere |
-| unused export | 16 module-private constants/interfaces: `GEMINI_EMBEDDING_DIMENSIONS`, `GEMINI_MAX_BATCH_SIZE`, `CLOUDFLARE_EMBEDDING_DIMENSIONS`, `NVIDIA_MODELS_API_URL`, `NVIDIA_CHAT_COMPLETIONS_URL`, `LEASE_DURATION_MS`, `BOSS_AUTHORIZED_EMAILS`, `BOSS_AUTHORIZED_USERNAMES`, `TransactionClient`, `DbOrTx`, `RepositoryEmbeddingContext`, `GitHubCompareFile`, `GitHubTreeEntry`, `RepositoryProvider`, `LLMProvider`, `AssembledCitation`, `EvidenceType`, `E2ERetrievalMetrics`, `E2EAnswerMetrics`, `E2ECaseResult`, `QueryEvalResult`, `CategoryEvalMetrics` | **DE-EXPORTED** — all still used, just not from outside their module |
-
-### Known false positive
-
-- `tree-sitter-wasms` is reported unused by knip because it is never `import`ed. `parserManager.ts:92-98` builds the path `node_modules/tree-sitter-wasms/out/<grammar>.wasm` with `path.join` and loads it via `Parser.Language.load`, and `next.config.ts` lists it in `serverExternalPackages`. **Keep the dependency.**
-
-### Test fix
-
-`entitlements.test.ts > rolls back consumed query with a single atomic SQL decrement` was failing on `HEAD` before this sweep. The assertion extracted `sql\`GREATEST(...)\`` by joining `queryChunks` and keeping only chunks whose `.value` is an array, but drizzle-orm `1.0.0-rc` emits string chunks (`{value: "GREATEST("}`), so the joined SQL was always `""` and the test could never pass. **FIXED** — the extraction now joins string chunks too. The production code was already correct.
-
-### Coverage config note
-
-`vitest.config.ts` coverage is scoped to `src/lib/ingestion/**` and `src/workflows/**` only. Everything else — `app/api`, `lib/auth`, `lib/plans`, `lib/retrieval`, `lib/embeddings`, `lib/mermaid` — is excluded, so `npm run test:coverage` reports no coverage for it. Widen `include` if you want those numbers.
-
-### Not changed
-
-- `.well-known/workflow/v1/**/route.js` files are reported as orphans by dependency-cruiser. They are `workflow` SDK build output, gitignored, and registered as real routes in the Next.js build. **Not dead code.**
-- `npm ci` and the lockfile's internal consistency are resolved (pinned `better-auth` to `1.6.24`, added `legacy-peer-deps=true` in `.npmrc`, and regenerated `package-lock.json`).
-
----
-
-## 12. Workspace UI cleanup, font unification, and composer layout (2026-10-08)
-
-The following workspace and design improvements were implemented:
-
-- **Repository search shortcut:** `src/components/ui/Kbd.tsx` displays `Ctrl K` on Windows and non-Apple platforms instead of the Windows glyph.
-- **Sidebar plan section simplified:** `src/app/components/workspace/Sidebar.tsx` removed the cluttered plan name, repository and query counts ("Infinite"), and "v1.1 · Beta" tags. Replaced with a clean, single `Plan & usage` action button that triggers `PlanUsageModal`.
-- **Elimination of `/select` route:** Fully removed `src/app/select/` route and all buttons or links pointing to it (including "Browse Github repositories"), centralizing repo management into the workspace.
-- **Font system:** Preserved Ethnocentric (`--font-brand`, `font-brand` at `src/app/fonts/ethnocentric/`) specifically for the DRAG wordmark and watermark. Audited all other text to ensure no third font is used:
-  1. Manrope (`--font-sans`): body, UI, buttons, and general text.
-  2. Nohemi (`--font-display`): display headings with expanded letter spacing.
-  3. Fira Code (`--font-mono`): code snippets, line numbers, and monospace chips.
-  4. Ethnocentric (`--font-brand`): dedicated solely to DRAG logo branding.
-- **Display font letter spacing expansion:** Expanded `--tracking-display` from `-0.05em` to `0.03em` in `src/app/globals.css`. Bound letter spacing directly into `@utility font-display` so any heading using `font-display` inherits the open spacing. Removed hardcoded negative tracking (`tracking-[-0.05em]`, `tracking-[-0.03em]`) across the workspace and landing pages.
-- **Composer layout re-architecture:** Restructured `src/app/components/workspace/Composer.tsx` into a vertical column. The chat textarea is positioned on top with a comfortable `min-h-[52px]` and full width, while the bottom toolbar cleanly separates controls: `ModelSelector` on the bottom-left, and voice input plus send buttons on the bottom-right.
-
----
-
-## 13. Modal sizing parity, focus ring cleanup, and in-place message editing (2026-10-08)
-
-The following improvements were implemented across workspace components and API routes:
-
-- **Modal sizing and viewport alignment:** Updated `src/components/ui/Modal.tsx` to conditionally apply `max-w-lg` only when no custom `max-w-*` class is provided, avoiding utility class conflicts in Tailwind v4. Centered modals with viewport padding and set dialogs to flex column layout with `flex-1 min-h-0 overflow-y-auto` scroll areas. Updated both `PlanUsageModal.tsx` and `AddRepoModal.tsx` to consistent dimensions (`max-w-4xl h-[82vh] max-h-[780px] min-h-[580px]`), giving plan cards and the repository picker comfortable breathing room.
-- **Focus outline cleanup:** Removed intrusive global outline rules for `input:focus-visible` and `textarea:focus-visible` in `src/app/globals.css`. Updated `src/app/components/workspace/Composer.tsx` to ensure the chat textarea renders without inner focus boxes. Updated `src/app/components/workspace/Sidebar.tsx` and `src/app/components/workspace/ConversationList.tsx` to eliminate multiple concentric focus rings on the search bars, keeping a single clean accent border.
-- **In-place user message editing:** Updated `src/app/components/workspace/MessageBubble.tsx` so clicking Edit turns the user prompt into an inline textarea with Save and Cancel controls, rather than copying text down to the composer. The inline textarea uses neutral border styling with no focus outline lines. Pressing Escape cancels, and Enter saves the edit.
-- **Message update persistence:** Added `PATCH /api/conversations/[id]/messages` in `src/app/api/conversations/[id]/messages/route.ts` with user authorization checks and unit tests. Updated `src/app/workspace/page.tsx` to optimistically update message state and persist edits to Neon PostgreSQL.
-- **Sidebar width and metadata contrast:** Increased desktop sidebar width in `src/app/components/workspace/Sidebar.tsx` to 304px (and mobile to 325px), allowing search placeholder text and shortcut badges to fit without truncation. Elevated repository metadata contrast in `src/app/components/workspace/RepoList.tsx` by upgrading branch name to `font-mono font-medium text-ink`, size and sync times to `text-ink-2`, and separating with distinct midpoint dots.
-- **Enterprise plan header:** Removed the building icon next to the Enterprise plan header in `src/app/components/workspace/PlanUsageModal.tsx`, aligning it with the clean typography of the Free and Hobby cards.
-
----
-
-## 14. Workspace chat hardening, regeneration flow, and dynamic edit bubble (2026-10-08)
-
-The following fixes and enhancements were implemented across workspace chat components and backend endpoints:
-
-- **Answer regeneration flow.** `src/lib/chat/conversation.ts` and `src/app/api/chat/route.ts` implement dedicated `isRegenerate` and `regenerateMessageId` parameters. Instead of routing through the failed-answer retry path, regeneration targets the completed assistant message directly. It updates the existing message row in place (`status: "streaming"`, `citations: null`) and queries prior history strictly before the corresponding user prompt (`createdAt < targetUserMsg.createdAt`). This keeps thread ordering stable, prevents duplicate answers, and excludes later turns from the LLM prompt.
-- **Message edit verification and rollback.** `handleEditMessage` in `src/app/workspace/page.tsx` checks the `PATCH` response status. If the network request fails or returns an error status code, it rolls the displayed prompt back to its original saved text and displays an error message.
-- **Temporary message ID protection.** `src/app/components/workspace/MessageBubble.tsx` disables the Edit button while `message.id` starts with `temp-`. This prevents edits while the initial answer streams before the database ID returns.
-- **Shared message length limits.** Enforced `MAX_CHAT_MESSAGE_LENGTH` (4000 characters) in `PATCH /api/conversations/[id]/messages` and on the inline editor in `MessageBubble.tsx`. The inline Save button remains disabled when content is empty or exceeds 4000 characters.
-- **Model selector mobile viewport anchoring.** Anchored the upward model menu in `src/app/components/workspace/ModelSelector.tsx` to `bottom-full mb-2 left-0` with `max-w-[calc(100vw-2rem)]`. The menu stays within the chat column and screen bounds without clipping on small viewports.
-- **Model choice persistence across repository switches.** Lifted `isModelManuallyPicked` state to `src/app/workspace/page.tsx` and threaded it through `WorkspaceShell`, `ChatWindow`, and `Composer`. Switching repositories no longer overwrites a manually chosen model with the fastest probe winner.
-- **Speech recognition controls and boundaries.** Added whitespace boundary detection in `src/app/components/workspace/Composer.tsx` when appending new speech transcripts to existing text. Speech recognition now stops automatically when the form submits, and the Stop button remains clickable during streaming while recording.
-- **Dynamic inline edit bubble sizing.** Replaced the fixed 85% width edit box in `src/app/components/workspace/MessageBubble.tsx` with a CSS grid layout (`min-w-[180px] max-w-[75%]`). An invisible mirror span resizes the container dynamically in both width and height as text changes, matching the bubble appearance and right alignment.
-
----
-
-## 15. Dependency peer resolution and CI lockfile repair (2026-10-08)
-
-The following fixes resolved `npm ci` failures in GitHub Actions and local `npm install` `ERESOLVE` errors:
-
-- **Pinned Better Auth.** `package.json` pins `"better-auth": "1.6.24"`. This prevents automatic minor resolution to Better Auth 1.7.x, which removed `providerId` as a valid selector in `auth.api.getAccessToken` and would break six server routes and mock assertions across tests.
-- **Enabled legacy peer dependencies configuration.** Created `.npmrc` with `legacy-peer-deps=true`. This allows npm to accept `drizzle-orm@^1.0.0-rc.4` and `drizzle-kit@^1.0.0-rc.4` alongside `@better-auth/drizzle-adapter@1.6.24` and `better-auth@1.6.24` without tripping strict peer resolution checks in npm 7+.
-- **Clean lockfile regeneration.** Regenerated `package-lock.json` using `npm install --package-lock-only`. The missing lockfile entries (including `@nestjs/common` and transitive packages) were reconciled. `npm ci --dry-run` and clean `npm install` now succeed without errors.
-- **Test discriminated union narrowing.** Updated `src/lib/chat/__tests__/retryIdempotency.test.ts` to narrow `result.ok` before asserting `result.status`, satisfying TypeScript type checking on `ConversationChatResult` and oxlint `unicorn/no-thenable` checks.
-
----
-
-## 16. Regeneration claim concurrency, edit rollback scoping, and mirror height containment (2026-10-09)
-
-The following fixes harden stream concurrency, edit state recovery, and prompt editor layout:
-
-- **Atomic message regeneration claim and attempt ID ownership.** `src/lib/chat/conversation.ts` assigns an `attemptId` UUID to every assistant message and claims rows with `ne(messages.status, "streaming")`. If a message is already streaming, it rejects the request with HTTP 409. All subsequent writes during embedding, retrieval, stream completion, or abortion require `and(eq(messages.id, assistantMsg.id), eq(messages.attemptId, attemptId))`. Older or disconnected streams can no longer overwrite a newer generation or mark it failed.
-- **Edit rollback request ID scoping.** `src/app/workspace/page.tsx` introduces a monotonic `messageEditSeqRef` counter map for edited messages. When a `PATCH` request fails or experiences a network error, it verifies `messageEditSeqRef.current.get(messageId) === editSeq` before rolling back the optimistic UI state. An earlier failed edit can no longer roll back a subsequent successful edit.
-- **Dynamic edit bubble mirror height containment.** `src/app/components/workspace/MessageBubble.tsx` applies `max-h-[220px] overflow-hidden` to the hidden mirror span and `max-h-[220px]` to the shared grid wrapper. The container expands naturally for short text and caps cleanly at 220px alongside the textarea for long prompts, keeping Save and Cancel controls positioned directly beneath the editor.
-
-
-
-
-
-
+## Fix pass
+- repositoryLeases.ts: detect abandoned ingestion rows without embedding lease/claim.
+- ingest.ts: preserve ready index when acquisition fails.
+- page.tsx: reload saved IDs after server-side chat failures.
+- Composer.tsx: stop speech recognition when disabled.
 

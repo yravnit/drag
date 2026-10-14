@@ -462,16 +462,18 @@ export default function Home() {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || "Could not restart indexing.");
       }
-      // Update local state to processing immediately
-      setStatusTracker({
-        id: repo.id,
-        embeddingStatus: "processing",
-        indexedAt: repo.indexedAt,
-      });
+      // Update local state to processing immediately, but only move the selected repository's
+      // tracker when this retry actually targets the selected repository. Retrying another row
+      // must not replace the selected repository's ingestion tracker.
       setRepositoriesList((prev) =>
         prev.map((r) => (r.id === repo.id ? { ...r, embeddingStatus: "processing" } : r)),
       );
       if (selectedRepo?.id === repo.id) {
+        setStatusTracker({
+          id: repo.id,
+          embeddingStatus: "processing",
+          indexedAt: repo.indexedAt,
+        });
         setSelectedRepo((prev) => (prev ? { ...prev, embeddingStatus: "processing" } : null));
       }
     } catch (err) {
@@ -481,12 +483,17 @@ export default function Home() {
   };
 
   const handleDeleteRepo = async (repoId: string) => {
+    // Defer clearing selection/tracking state until the DELETE actually succeeds, so a failed
+    // removal leaves the user's selected repository and status tracker intact.
     const res = await fetch(`/api/repos/${repoId}`, { method: "DELETE" });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
       throw new Error(data.error || "Could not remove this repository.");
     }
     setPendingRepoDelete(null);
+    if (statusTracker?.id === repoId) {
+      setStatusTracker(null);
+    }
     if (selectedRepo?.id === repoId) {
       setSelectedRepo(null);
     }
@@ -606,9 +613,10 @@ export default function Home() {
           : (data.error || "Generation failed");
 
         setChatError(displayErr);
-        // Reload from the server instead of leaving a local temp bubble behind. A temp id is not a
-        // UUID, so retrying it later would send an unparseable value as retryMessageId and fail
-        // before generation ever starts.
+        // Embedding, retrieval, and model-start failures are reported as HTTP errors after the
+        // server has already saved the user turn and a failed assistant turn. Reload the saved
+        // IDs instead of keeping the temporary assistant id, so a later retry can reuse that
+        // failed turn rather than inserting the question a second time.
         if (requestId === messagesRequestIdRef.current) {
           setMessagesList((prev) =>
             prev.map((msg) =>
@@ -617,7 +625,13 @@ export default function Home() {
                 : msg,
             ),
           );
-          await loadMessages(conversationId, requestId);
+          // Rate-limit and quota rejections (and other pre-insertion failures) save no rows, so
+          // reloading would replace the pending turn with saved history and erase the question
+          // (and its retry button). Only failures that occur after the server has persisted the
+          // user and failed assistant turns need their saved IDs. Those surface as 5xx.
+          if (res.status >= 500) {
+            await loadMessages(conversationId, requestId);
+          }
         }
         setIsStreaming(false);
         return;
@@ -717,7 +731,7 @@ export default function Home() {
         body: JSON.stringify({
           conversationId,
           message: promptToRetry,
-          isRetry: true,
+          isRetry: isSavedMessage,
           retryMessageId: isSavedMessage ? failedMsg.id : undefined,
           model: selectedModel !== "default" ? selectedModel : undefined,
           responseMode,

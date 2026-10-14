@@ -178,13 +178,30 @@ describe("answerConversation", () => {
     expect(setup.inserts).toHaveLength(0);
   });
 
+  it("returns 400 when repository is still indexing or in a failed state", async () => {
+    const setup = baseSetup([
+      Promise.resolve([{ id: "conv-1", userId: "user-1", repositoryId: "repo-1" }]),
+      Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name", embeddingStatus: "processing" }]),
+      freshAccessRow(true),
+    ]);
+
+    const result = await answerConversation(setup.deps, setup.input);
+
+    expect(result).toEqual({
+      ok: false,
+      status: 400,
+      error: "Repository is still indexing. Please wait until indexing completes before asking questions.",
+    });
+    expect(setup.inserts).toHaveLength(0);
+  });
+
   it("returns 403 when access verification reports no access on GitHub", async () => {
     // verifyRepositoryAccess reads the access cache through the same database
     // handle; a fresh row with hasAccess=false short-circuits without any
     // network call, so no vi.mock is needed.
     const setup = baseSetup([
       Promise.resolve([{ id: "conv-1", userId: "user-1", repositoryId: "repo-1" }]),
-      Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name" }]),
+      Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name", embeddingStatus: "ready" }]),
       freshAccessRow(false),
     ]);
 
@@ -201,7 +218,7 @@ describe("answerConversation", () => {
   it("happy path: streams fully, inserts both messages and persists completed state with citations", async () => {
     const setup = baseSetup([
       Promise.resolve([{ id: "conv-1", userId: "user-1", repositoryId: "repo-1" }]),
-      Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name" }]),
+      Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name", embeddingStatus: "ready" }]),
       freshAccessRow(true),
       // History query: previous completed user messages.
       Promise.resolve([{ role: "user", content: "earlier question" }]),
@@ -258,7 +275,7 @@ describe("answerConversation", () => {
     const setup = baseSetup(
       [
         Promise.resolve([{ id: "conv-1", userId: "user-1", repositoryId: "repo-1" }]),
-        Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name" }]),
+        Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name", embeddingStatus: "ready" }]),
         freshAccessRow(true),
         Promise.resolve([]),
       ],
@@ -289,7 +306,7 @@ describe("answerConversation", () => {
     const setup = baseSetup(
       [
         Promise.resolve([{ id: "conv-1", userId: "user-1", repositoryId: "repo-1" }]),
-        Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name" }]),
+        Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name", embeddingStatus: "ready" }]),
         freshAccessRow(true),
       ],
       {
@@ -317,7 +334,7 @@ describe("answerConversation", () => {
     const setup = baseSetup(
       [
         Promise.resolve([{ id: "conv-1", userId: "user-1", repositoryId: "repo-1" }]),
-        Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name" }]),
+        Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name", embeddingStatus: "ready" }]),
         freshAccessRow(true),
         Promise.resolve([]),
       ],
@@ -344,7 +361,7 @@ describe("answerConversation", () => {
     const setup = baseSetup(
       [
         Promise.resolve([{ id: "conv-1", userId: "user-1", repositoryId: "repo-1" }]),
-        Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name" }]),
+        Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name", embeddingStatus: "ready" }]),
         freshAccessRow(true),
         Promise.resolve([]),
       ],
@@ -372,7 +389,7 @@ describe("answerConversation", () => {
     const setup = baseSetup(
       [
         Promise.resolve([{ id: "conv-1", userId: "user-1", repositoryId: "repo-1" }]),
-        Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name" }]),
+        Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name", embeddingStatus: "ready" }]),
         freshAccessRow(true),
         // Database returns desc(createdAt), so latest first
         Promise.resolve([
@@ -430,7 +447,7 @@ describe("answerConversation", () => {
         const setup = baseSetup(
           [
             Promise.resolve([{ id: "conv-1", userId: "user-1", repositoryId: "repo-1" }]),
-            Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name" }]),
+            Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name", embeddingStatus: "ready" }]),
             freshAccessRow(true),
             Promise.resolve([]),
           ],
@@ -467,7 +484,7 @@ describe("answerConversation", () => {
     const setup = baseSetup(
       [
         Promise.resolve([{ id: "conv-1", userId: "user-1", repositoryId: "repo-1", title: "New Chat Thread" }]),
-        Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name" }]),
+        Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name", embeddingStatus: "ready" }]),
         freshAccessRow(true),
         Promise.resolve([]),
       ],
@@ -504,7 +521,7 @@ describe("answerConversation", () => {
     const setup = baseSetup(
       [
         Promise.resolve([{ id: "conv-1", userId: "user-1", repositoryId: "repo-1", title: "Untouched Name" }]),
-        Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name" }]),
+        Promise.resolve([{ id: "repo-1", owner: "owner-1", name: "repo-name", embeddingStatus: "ready" }]),
         freshAccessRow(true),
         Promise.resolve([]),
       ],
@@ -543,4 +560,6 @@ describe("answerConversation", () => {
     expect(values).toContain("Untouched Name");
   });
 });
+
+
 

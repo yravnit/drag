@@ -215,7 +215,7 @@ export function RepoList({
               }
             }}
             className={cn(
-              "group relative cursor-pointer rounded-control border border-transparent px-2 py-2 transition-colors duration-150 active:scale-[0.99]",
+              "group relative cursor-pointer rounded-control border border-transparent px-2 py-2 transition-[background-color,color,border-color,transform] duration-150 ease-out active:scale-[0.99] active:duration-75",
               isSelected
                 ? "bg-rail-active text-rail-active-ink"
                 : "text-ink-2 hover:bg-rail-hover hover:text-ink",

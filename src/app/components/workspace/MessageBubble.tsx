@@ -11,7 +11,7 @@ import { MAX_CHAT_MESSAGE_LENGTH, type ChatMessage, type Citation } from "./type
 const COLLAPSE_OVER_CHARS = 280;
 
 const ACTION_ROW_ITEM =
-  "inline-flex cursor-pointer items-center gap-1.5 rounded-[6px] px-2 py-1 text-[12px] font-medium text-chat-ink-3 transition-colors duration-150 hover:bg-chat-3 hover:text-chat-ink active:scale-[0.96]";
+  "inline-flex cursor-pointer items-center gap-1.5 rounded-[6px] px-2 py-1 text-[12px] font-medium text-chat-ink-3 transition-[background-color,color,transform] duration-150 ease-out hover:bg-chat-3 hover:text-chat-ink active:scale-[0.985] active:duration-75";
 
 /** How long the action row keeps the "Generating…" label before the stream takes over the feedback. */
 const REGENERATE_FEEDBACK_MS = 900;

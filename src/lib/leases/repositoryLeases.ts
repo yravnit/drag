@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { Database } from "@/db/db";
 import { chunks, repositories } from "@/db/schema";
-import { and, eq, inArray, isNull, lt, ne, or } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, lt, ne, or } from "drizzle-orm";
 
 const LEASE_DURATION_MS = 10 * 60 * 1000;
 
@@ -240,4 +240,69 @@ export async function findRepositoriesWithPendingEmbeddings(
       ),
     )
     .limit(limit);
+}
+
+export async function markStaleProcessingRepositoriesAsFailed(
+  database: Database,
+  _staleMs: number = 15 * 60 * 1000,
+): Promise<number> {
+  if (!database.select || !database.update) return 0;
+  const now = new Date();
+  const stale = await database
+    .select({
+      id: repositories.id,
+      embeddingClaimId: repositories.embeddingClaimId,
+      embeddingLeaseExpiresAt: repositories.embeddingLeaseExpiresAt,
+      updatedAt: repositories.updatedAt,
+    })
+    .from(repositories)
+    .where(
+      and(
+        eq(repositories.embeddingStatus, "processing"),
+        isNotNull(repositories.embeddingLeaseExpiresAt),
+        lt(repositories.embeddingLeaseExpiresAt, now),
+      ),
+    );
+
+  if (stale.length === 0) return 0;
+
+  let changedRows = 0;
+  for (const repo of stale) {
+    const updateQuery = database
+      .update(repositories)
+      .set({
+        embeddingStatus: "failed",
+        embeddingLeaseExpiresAt: null,
+        embeddingClaimId: null,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(repositories.id, repo.id),
+          eq(repositories.embeddingStatus, "processing"),
+          repo.embeddingClaimId
+            ? eq(repositories.embeddingClaimId, repo.embeddingClaimId)
+            : isNull(repositories.embeddingClaimId),
+          repo.embeddingLeaseExpiresAt
+            ? eq(repositories.embeddingLeaseExpiresAt, repo.embeddingLeaseExpiresAt)
+            : isNull(repositories.embeddingLeaseExpiresAt),
+          repo.updatedAt
+            ? eq(repositories.updatedAt, repo.updatedAt)
+            : isNull(repositories.updatedAt),
+        ),
+      );
+
+    const result =
+      typeof updateQuery.returning === "function"
+        ? await updateQuery.returning({ id: repositories.id })
+        : await updateQuery;
+
+    changedRows += Array.isArray(result)
+      ? result.length
+      : typeof result?.rowCount === "number"
+        ? result.rowCount
+        : 0;
+  }
+
+  return changedRows;
 }

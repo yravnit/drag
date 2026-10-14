@@ -20,3 +20,9 @@ technical constraints, anti-patterns, and ordered next steps.
 Every agent MUST edit and update `HANDOFF.md` in the project root after writing or modifying any code. Keep the documentation in sync with all implemented features, APIs, configurations, and status changes.
 <!-- END:update-handoff-rule -->
 
+<!-- BEGIN:verify-rule -->
+# Verify After Every Code Write
+
+Every agent MUST run `npm run lint`, `npm run lint:ox`, `tsc --noEmit`, and `npm run build` after writing or modifying any code, and they MUST all pass before reporting done. These are CI-gated; do not skip or defer.
+<!-- END:verify-rule -->
+

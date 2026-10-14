@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth/server";
 import { db } from "@/db/db";
 import { repositories, repositoryFiles, chunks } from "@/db/schema";
-import { eq, count, sql, and, isNotNull } from "drizzle-orm";
+import { eq, count, sql, and, isNotNull, isNull } from "drizzle-orm";
 import { assertRepositoryAssociation } from "@/lib/access/repositoryAccess";
 
 export async function GET(
@@ -38,6 +38,9 @@ export async function GET(
         isPrivate: repositories.isPrivate,
         embeddingProvider: repositories.embeddingProvider,
         embeddingModel: repositories.embeddingModel,
+        updatedAt: repositories.updatedAt,
+        embeddingLeaseExpiresAt: repositories.embeddingLeaseExpiresAt,
+        embeddingClaimId: repositories.embeddingClaimId,
       })
       .from(repositories)
       .where(eq(repositories.id, repoId))
@@ -87,7 +90,72 @@ export async function GET(
       // Graceful fallback if testing without mock repository_files/chunks table
     }
 
-    const rawStatus = repo.embeddingStatus || "processing";
+    const now = new Date();
+    const isLeaseExpired = repo.embeddingLeaseExpiresAt
+      ? repo.embeddingLeaseExpiresAt.getTime() < now.getTime()
+      : false;
+    // Ingestion holds no embedding lease and does not refresh the row while downloading or parsing.
+    // Treat only an expired embedding lease as abandoned; a missing lease is not proof that a
+    // (possibly slow) ingestion has stalled. See issue: track ingestion ownership/progress first.
+    let rawStatus = repo.embeddingStatus || "processing";
+    let isStale = false;
+
+    if (
+      rawStatus === "processing" &&
+      isLeaseExpired
+    ) {
+      try {
+        if (db.update) {
+          const updateQuery = db
+            .update(repositories)
+            .set({
+              embeddingStatus: "failed",
+              embeddingLeaseExpiresAt: null,
+              embeddingClaimId: null,
+              updatedAt: now,
+            })
+            .where(
+              and(
+                eq(repositories.id, repoId),
+                eq(repositories.embeddingStatus, "processing"),
+                repo.embeddingClaimId
+                  ? eq(repositories.embeddingClaimId, repo.embeddingClaimId)
+                  : isNull(repositories.embeddingClaimId),
+                repo.embeddingLeaseExpiresAt
+                  ? eq(repositories.embeddingLeaseExpiresAt, repo.embeddingLeaseExpiresAt)
+                  : isNull(repositories.embeddingLeaseExpiresAt),
+                repo.updatedAt
+                  ? eq(repositories.updatedAt, repo.updatedAt)
+                  : isNull(repositories.updatedAt),
+              ),
+            );
+
+          const updatedResult =
+            typeof updateQuery.returning === "function"
+              ? await updateQuery.returning({ id: repositories.id })
+              : await updateQuery;
+
+          const matchedRows = Array.isArray(updatedResult)
+            ? updatedResult.length
+            : typeof updatedResult?.rowCount === "number"
+              ? updatedResult.rowCount
+              : 0;
+
+          // A concurrent completion or new claim makes the conditional update affect zero rows,
+          // which preserves that newer state instead of clobbering it.
+          if (matchedRows > 0) {
+            rawStatus = "failed";
+            isStale = true;
+          }
+        } else {
+          rawStatus = "failed";
+          isStale = true;
+        }
+      } catch (err) {
+        console.error("Failed to mark stale repository as failed:", err);
+      }
+    }
+
     let stage: "preparing" | "indexing" | "embedding" | "ready" | "failed";
     if (rawStatus === "failed") {
       stage = "failed";
@@ -112,6 +180,7 @@ export async function GET(
       id: repo.id,
       embeddingStatus: rawStatus,
       stage,
+      isStale,
       indexedAt: repo.indexedAt,
       defaultBranch: repo.defaultBranch,
       primaryLanguage: repo.primaryLanguage,

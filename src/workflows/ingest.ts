@@ -9,8 +9,8 @@ import { IngestionDatabaseLayer } from "@/lib/ingestion/dbLayer";
 import { GitHubApiClient } from "@/lib/ingestion/githubApiClient";
 import { start } from "workflow/api";
 import { embedRepository } from "@/workflows/embed";
-import { userRepositories } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { userRepositories, repositories } from "@/db/schema";
+import { and, eq } from "drizzle-orm";
 import { getUserEntitlements } from "@/lib/plans/entitlements";
 import { clearEmbeddingLease } from "@/lib/leases/repositoryLeases";
 
@@ -22,6 +22,7 @@ export interface IngestPayload {
   batchSize?: number;
   extraIgnorePatterns?: string[];
   userId?: string;
+  repositoryId?: string;
 }
 
 export interface IngestResult {
@@ -65,7 +66,14 @@ async function runIngestionStep(
   const provider = new GitHubArchiveRepositoryProvider(apiClient);
   const dbLayer = new IngestionDatabaseLayer(db);
 
-  const acquiredRepo = await provider.acquire(owner, repo, { authToken, revision });
+  const acquiredRepo = await provider.acquire(owner, repo, { authToken, revision }).catch((err) => {
+    // Acquisition failures happen before any index write. Mark them so the orchestrator
+    // can preserve an already-ready repository's intact index instead of marking it failed.
+    if (err instanceof Error) {
+      (err as Error & { acquisitionFailed: boolean }).acquisitionFailed = true;
+    }
+    throw err;
+  });
 
   try {
     const { metadata, workspacePath } = acquiredRepo;
@@ -310,6 +318,48 @@ async function triggerEmbeddingsStep(repositoryId: string): Promise<void> {
   await start(embedRepository, [{ repositoryId }]);
 }
 
+async function markIngestFailedStep(
+  repositoryId?: string,
+  owner?: string,
+  repo?: string,
+): Promise<void> {
+  "use step";
+  try {
+    let targetId = repositoryId;
+    if (!targetId && owner && repo) {
+      const url = `https://github.com/${owner}/${repo}`;
+      const [found] = await db
+        .select({ id: repositories.id })
+        .from(repositories)
+        .where(eq(repositories.url, url))
+        .limit(1);
+      targetId = found?.id;
+    }
+
+    if (targetId) {
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(targetId);
+      if (isUuid) {
+        await db
+          .update(repositories)
+          .set({
+            embeddingStatus: "failed",
+            embeddingLeaseExpiresAt: null,
+            embeddingClaimId: null,
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(repositories.id, targetId),
+              eq(repositories.embeddingStatus, "processing"),
+            ),
+          );
+      }
+    }
+  } catch (err) {
+    console.error("[Workflow] Failed to mark repository as failed:", err);
+  }
+}
+
 // ─── Workflow Orchestrator ──────────────────────────────────────────────────
 
 export async function ingestRepository(payload: IngestPayload): Promise<IngestResult> {
@@ -322,7 +372,16 @@ export async function ingestRepository(payload: IngestPayload): Promise<IngestRe
   const startTime = Date.now();
   console.log(`[Workflow] Starting ingestion for ${payload.owner}/${payload.repo}`);
 
-  const stepResult = await runIngestionStep(payload, payload.batchSize ?? 10);
+  let stepResult: Awaited<ReturnType<typeof runIngestionStep>>;
+  try {
+    stepResult = await runIngestionStep(payload, payload.batchSize ?? 10);
+  } catch (error) {
+    console.error(`[Workflow] Ingestion step failed for ${payload.owner}/${payload.repo}:`, error);
+    // markIngestFailedStep only touches rows still in "processing", so an already-ready index
+    // is preserved even when downloading the new commit fails.
+    await markIngestFailedStep(payload.repositoryId, payload.owner, payload.repo);
+    throw error;
+  }
 
   if (!stepResult.skipped && stepResult.repositoryId) {
     await triggerEmbeddingsStep(stepResult.repositoryId);
