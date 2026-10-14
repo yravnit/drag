@@ -244,7 +244,7 @@ export async function findRepositoriesWithPendingEmbeddings(
 
 export async function markStaleProcessingRepositoriesAsFailed(
   database: Database,
-  staleMs: number = 15 * 60 * 1000,
+  _staleMs: number = 15 * 60 * 1000,
 ): Promise<number> {
   if (!database.select || !database.update) return 0;
   const now = new Date();
