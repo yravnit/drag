@@ -91,21 +91,18 @@ export async function GET(
     }
 
     const now = new Date();
-    const STALE_INGEST_MS = 15 * 60 * 1000;
     const isLeaseExpired = repo.embeddingLeaseExpiresAt
       ? repo.embeddingLeaseExpiresAt.getTime() < now.getTime()
       : false;
-    // `updatedAt` only indicates staleness when no lease exists. When a lease exists, only an
-    // expired lease makes a processing repository stale.
-    const isUpdateStale = !repo.embeddingLeaseExpiresAt && repo.updatedAt
-      ? now.getTime() - repo.updatedAt.getTime() > STALE_INGEST_MS
-      : false;
+    // Ingestion holds no embedding lease and does not refresh the row while downloading or parsing.
+    // Treat only an expired embedding lease as abandoned; a missing lease is not proof that a
+    // (possibly slow) ingestion has stalled. See issue: track ingestion ownership/progress first.
     let rawStatus = repo.embeddingStatus || "processing";
     let isStale = false;
 
     if (
       rawStatus === "processing" &&
-      (isLeaseExpired || isUpdateStale)
+      isLeaseExpired
     ) {
       try {
         if (db.update) {

@@ -618,7 +618,20 @@ export default function Home() {
         // IDs instead of keeping the temporary assistant id, so a later retry can reuse that
         // failed turn rather than inserting the question a second time.
         if (requestId === messagesRequestIdRef.current) {
-          await loadMessages(conversationId, requestId);
+          setMessagesList((prev) =>
+            prev.map((msg) =>
+              msg.id === tempAssistantId
+                ? { ...msg, status: "failed", content: displayErr }
+                : msg,
+            ),
+          );
+          // Rate-limit and quota rejections (and other pre-insertion failures) save no rows, so
+          // reloading would replace the pending turn with saved history and erase the question
+          // (and its retry button). Only failures that occur after the server has persisted the
+          // user and failed assistant turns need their saved IDs. Those surface as 5xx.
+          if (res.status >= 500) {
+            await loadMessages(conversationId, requestId);
+          }
         }
         setIsStreaming(false);
         return;

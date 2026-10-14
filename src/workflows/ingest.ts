@@ -10,7 +10,7 @@ import { GitHubApiClient } from "@/lib/ingestion/githubApiClient";
 import { start } from "workflow/api";
 import { embedRepository } from "@/workflows/embed";
 import { userRepositories, repositories } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { getUserEntitlements } from "@/lib/plans/entitlements";
 import { clearEmbeddingLease } from "@/lib/leases/repositoryLeases";
 
@@ -347,7 +347,12 @@ async function markIngestFailedStep(
             embeddingClaimId: null,
             updatedAt: new Date(),
           })
-          .where(eq(repositories.id, targetId));
+          .where(
+            and(
+              eq(repositories.id, targetId),
+              eq(repositories.embeddingStatus, "processing"),
+            ),
+          );
       }
     }
   } catch (err) {
@@ -372,12 +377,9 @@ export async function ingestRepository(payload: IngestPayload): Promise<IngestRe
     stepResult = await runIngestionStep(payload, payload.batchSize ?? 10);
   } catch (error) {
     console.error(`[Workflow] Ingestion step failed for ${payload.owner}/${payload.repo}:`, error);
-    const isAcquisitionFailure =
-      error instanceof Error &&
-      (error as Error & { acquisitionFailed?: boolean }).acquisitionFailed === true;
-    if (!isAcquisitionFailure) {
-      await markIngestFailedStep(payload.repositoryId, payload.owner, payload.repo);
-    }
+    // markIngestFailedStep only touches rows still in "processing", so an already-ready index
+    // is preserved even when downloading the new commit fails.
+    await markIngestFailedStep(payload.repositoryId, payload.owner, payload.repo);
     throw error;
   }
 

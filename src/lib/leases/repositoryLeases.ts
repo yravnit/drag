@@ -248,8 +248,6 @@ export async function markStaleProcessingRepositoriesAsFailed(
 ): Promise<number> {
   if (!database.select || !database.update) return 0;
   const now = new Date();
-  const cutoff = new Date(Date.now() - staleMs);
-
   const stale = await database
     .select({
       id: repositories.id,
@@ -261,16 +259,8 @@ export async function markStaleProcessingRepositoriesAsFailed(
     .where(
       and(
         eq(repositories.embeddingStatus, "processing"),
-        or(
-          and(
-            isNull(repositories.embeddingLeaseExpiresAt),
-            lt(repositories.updatedAt, cutoff),
-          ),
-          and(
-            isNotNull(repositories.embeddingLeaseExpiresAt),
-            lt(repositories.embeddingLeaseExpiresAt, now),
-          ),
-        ),
+        isNotNull(repositories.embeddingLeaseExpiresAt),
+        lt(repositories.embeddingLeaseExpiresAt, now),
       ),
     );
 
