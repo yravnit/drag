@@ -66,7 +66,14 @@ async function runIngestionStep(
   const provider = new GitHubArchiveRepositoryProvider(apiClient);
   const dbLayer = new IngestionDatabaseLayer(db);
 
-  const acquiredRepo = await provider.acquire(owner, repo, { authToken, revision });
+  const acquiredRepo = await provider.acquire(owner, repo, { authToken, revision }).catch((err) => {
+    // Acquisition failures happen before any index write. Mark them so the orchestrator
+    // can preserve an already-ready repository's intact index instead of marking it failed.
+    if (err instanceof Error) {
+      (err as Error & { acquisitionFailed: boolean }).acquisitionFailed = true;
+    }
+    throw err;
+  });
 
   try {
     const { metadata, workspacePath } = acquiredRepo;
@@ -365,7 +372,12 @@ export async function ingestRepository(payload: IngestPayload): Promise<IngestRe
     stepResult = await runIngestionStep(payload, payload.batchSize ?? 10);
   } catch (error) {
     console.error(`[Workflow] Ingestion step failed for ${payload.owner}/${payload.repo}:`, error);
-    await markIngestFailedStep(payload.repositoryId, payload.owner, payload.repo);
+    const isAcquisitionFailure =
+      error instanceof Error &&
+      (error as Error & { acquisitionFailed?: boolean }).acquisitionFailed === true;
+    if (!isAcquisitionFailure) {
+      await markIngestFailedStep(payload.repositoryId, payload.owner, payload.repo);
+    }
     throw error;
   }
 

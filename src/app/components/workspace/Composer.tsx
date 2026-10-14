@@ -176,6 +176,15 @@ export function Composer({
     };
   }, [recording]);
 
+  // Status changes can disable the composer while recognition is still active. Cancel it there so
+  // the user is not left with a running instance and no working stop control.
+  useEffect(() => {
+    if (disabled && recording) {
+      recordingRef.current = false;
+      setRecording(false);
+    }
+  }, [disabled, recording]);
+
   const stopRecording = () => {
     recordingRef.current = false;
     recognitionRef.current?.stop();

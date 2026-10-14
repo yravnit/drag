@@ -100,18 +100,12 @@ export async function GET(
     const isUpdateStale = !repo.embeddingLeaseExpiresAt && repo.updatedAt
       ? now.getTime() - repo.updatedAt.getTime() > STALE_INGEST_MS
       : false;
-    // An ingestion-owned signal (claim id or active/expired lease) must exist before a stale
-    // or expired timestamp can turn an active repository into a failure. A bare `updatedAt`
-    // is not proof that ingestion ever owned the row.
-    const hasIngestionSignal = Boolean(repo.embeddingClaimId) || Boolean(repo.embeddingLeaseExpiresAt);
-
     let rawStatus = repo.embeddingStatus || "processing";
     let isStale = false;
 
     if (
       rawStatus === "processing" &&
-      (isLeaseExpired || isUpdateStale) &&
-      hasIngestionSignal
+      (isLeaseExpired || isUpdateStale)
     ) {
       try {
         if (db.update) {

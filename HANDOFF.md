@@ -510,3 +510,11 @@ DRAG monitors NVIDIA LLM availability automatically without manual model lists.
 - Tests: 
 pm test = 651 passing; typecheck clean. Formatting (oxfmt) is not fully applied and is a style-only issue.
 
+
+---
+## Fix pass
+- repositoryLeases.ts: detect abandoned ingestion rows without embedding lease/claim.
+- ingest.ts: preserve ready index when acquisition fails.
+- page.tsx: reload saved IDs after server-side chat failures.
+- Composer.tsx: stop speech recognition when disabled.
+

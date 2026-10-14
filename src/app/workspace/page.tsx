@@ -613,14 +613,12 @@ export default function Home() {
           : (data.error || "Generation failed");
 
         setChatError(displayErr);
+        // Embedding, retrieval, and model-start failures are reported as HTTP errors after the
+        // server has already saved the user turn and a failed assistant turn. Reload the saved
+        // IDs instead of keeping the temporary assistant id, so a later retry can reuse that
+        // failed turn rather than inserting the question a second time.
         if (requestId === messagesRequestIdRef.current) {
-          setMessagesList((prev) =>
-            prev.map((msg) =>
-              msg.id === tempAssistantId
-                ? { ...msg, status: "failed", content: displayErr }
-                : msg,
-            ),
-          );
+          await loadMessages(conversationId, requestId);
         }
         setIsStreaming(false);
         return;

@@ -262,10 +262,6 @@ export async function markStaleProcessingRepositoriesAsFailed(
       and(
         eq(repositories.embeddingStatus, "processing"),
         or(
-          isNotNull(repositories.embeddingClaimId),
-          isNotNull(repositories.embeddingLeaseExpiresAt),
-        ),
-        or(
           and(
             isNull(repositories.embeddingLeaseExpiresAt),
             lt(repositories.updatedAt, cutoff),
